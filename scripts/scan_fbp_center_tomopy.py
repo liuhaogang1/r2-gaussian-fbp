@@ -38,7 +38,12 @@ def parse_args():
     parser.add_argument("--resize_order", type=int, choices=[0, 1, 3], default=1)
     parser.add_argument("--projection_scale", type=float, default=1.0)
     parser.add_argument("--pixel_size", type=float, default=0.02)
-    parser.add_argument("--method", choices=["vo", "scipy"], default="vo")
+    parser.add_argument(
+        "--method",
+        choices=["pair", "vo", "scipy"],
+        default="pair",
+        help="pair robustly matches the acquired 0/180 endpoint pair; vo/scipy use TomoPy.",
+    )
     parser.add_argument("--init_px", type=float, default=None)
     parser.add_argument("--tol", type=float, default=0.25)
     parser.add_argument("--algorithm", default="scipy")
@@ -47,6 +52,26 @@ def parse_args():
     parser.add_argument("--slice_step", type=int, default=8)
     parser.add_argument("--slice_margin", type=int, default=128)
     parser.add_argument("--max_slices", type=int, default=9)
+    parser.add_argument("--pair_min_offset_px", type=float, default=-100.0)
+    parser.add_argument("--pair_max_offset_px", type=float, default=100.0)
+    parser.add_argument("--pair_coarse_step_px", type=float, default=1.0)
+    parser.add_argument("--pair_fine_step_px", type=float, default=0.1)
+    parser.add_argument(
+        "--pair_min_score", type=float, default=0.10,
+        help="Minimum robust endpoint correlation required to mark center_valid.",
+    )
+    parser.add_argument(
+        "--pair_min_peak_prominence",
+        type=float,
+        default=0.001,
+        help="Minimum score gap from adjacent sampled centers required to mark center_valid.",
+    )
+    parser.add_argument(
+        "--pair_max_center_spread_px",
+        type=float,
+        default=5.0,
+        help="Maximum p90-p10 per-row center spread allowed for a valid result.",
+    )
     parser.add_argument(
         "--axis_slope_threshold",
         type=float,
@@ -68,19 +93,139 @@ def configure_threads(threads):
     return threads
 
 
+def row_pair_scores(view0, view180, center_px, margin_px):
+    """Correlate each 0-degree row with the reflected 180-degree row."""
+    height, width = view0.shape
+    lo = max(2, int(margin_px))
+    hi = min(width - 3, width - int(margin_px) - 1)
+    if hi <= lo:
+        return np.full(height, np.nan, dtype=np.float64)
+    x = np.arange(lo, hi + 1, dtype=np.float32)
+    reflected = 2.0 * float(center_px) - x
+    keep = (reflected >= 0.0) & (reflected <= width - 1.0)
+    x, reflected = x[keep], reflected[keep]
+    if x.size < 16:
+        return np.full(height, np.nan, dtype=np.float64)
+
+    source_x = np.arange(width, dtype=np.float32)
+    fixed = np.stack([np.interp(x, source_x, row) for row in view0], axis=0)
+    moving = np.stack(
+        [np.interp(reflected, source_x, row) for row in view180], axis=0
+    )
+    fixed -= np.median(fixed, axis=1, keepdims=True)
+    moving -= np.median(moving, axis=1, keepdims=True)
+    texture = (
+        (np.percentile(np.abs(fixed), 75, axis=1) > 1e-5)
+        & (np.percentile(np.abs(moving), 75, axis=1) > 1e-5)
+    )
+    denominator = np.sqrt(
+        np.sum(fixed * fixed, axis=1) * np.sum(moving * moving, axis=1)
+    )
+    valid = texture & (denominator > 1e-8)
+    scores = np.full(height, np.nan, dtype=np.float64)
+    scores[valid] = np.sum(fixed * moving, axis=1)[valid] / denominator[valid]
+    return scores
+
+
+def find_center_by_endpoint_pair(endpoint_pair, rows, args):
+    """Robust two-stage 0/180 endpoint-pair center search.
+
+    Rows with weak signal are excluded.  For every candidate, the score is the
+    median of the strongest 70% of retained rows, avoiding domination by the
+    vacuum/background or a few corrupted detector rows.
+    """
+    view0, view180 = endpoint_pair
+    reference = view0.shape[1] / 2.0
+    rows = np.asarray(rows, dtype=np.int64)
+
+    def scan(offsets):
+        aggregate_scores, scores_by_candidate = [], []
+        for offset in offsets:
+            scores = row_pair_scores(
+                view0, view180, reference + float(offset), args.slice_margin
+            )[rows]
+            finite = np.sort(scores[np.isfinite(scores)])
+            score = -1.0 if finite.size == 0 else float(
+                np.median(finite[int(0.30 * finite.size):])
+            )
+            aggregate_scores.append(score)
+            scores_by_candidate.append(scores)
+        return np.asarray(aggregate_scores, dtype=np.float64), scores_by_candidate
+
+    coarse_offsets = np.arange(
+        args.pair_min_offset_px,
+        args.pair_max_offset_px + args.pair_coarse_step_px * 0.5,
+        args.pair_coarse_step_px,
+        dtype=np.float64,
+    )
+    if coarse_offsets.size == 0 or args.pair_fine_step_px <= 0:
+        raise ValueError("Invalid endpoint-pair scan range or step")
+    coarse_scores, _ = scan(coarse_offsets)
+    coarse_best = float(coarse_offsets[int(np.nanargmax(coarse_scores))])
+    half_width = max(1.0, float(args.pair_coarse_step_px))
+    fine_offsets = np.arange(
+        max(args.pair_min_offset_px, coarse_best - half_width),
+        min(args.pair_max_offset_px, coarse_best + half_width)
+        + args.pair_fine_step_px * 0.5,
+        args.pair_fine_step_px,
+        dtype=np.float64,
+    )
+    fine_scores, scores_by_candidate = scan(fine_offsets)
+    best_index = int(np.nanargmax(fine_scores))
+    best_offset = float(fine_offsets[best_index])
+    # The grid scan is deliberately kept for an inspectable CSV.  A local
+    # parabola makes the reported center less dependent on the 0.1-pixel grid
+    # without extrapolating outside the tested interval.
+    if 0 < best_index < len(fine_offsets) - 1:
+        left, peak, right = fine_scores[best_index - 1 : best_index + 2]
+        denominator = left - 2.0 * peak + right
+        if np.isfinite(denominator) and denominator < -1e-9:
+            correction = 0.5 * (left - right) / denominator * args.pair_fine_step_px
+            if abs(correction) <= args.pair_fine_step_px:
+                best_offset += float(correction)
+    row_centers = np.full(rows.size, np.nan, dtype=np.float64)
+    for position, row in enumerate(rows):
+        row_scores = np.asarray(
+            [row_pair_scores(view0, view180, reference + offset, args.slice_margin)[row]
+             for offset in fine_offsets],
+            dtype=np.float64,
+        )
+        if np.isfinite(row_scores).any():
+            row_centers[position] = reference + float(
+                fine_offsets[int(np.nanargmax(row_scores))]
+            )
+    exclusion = max(1.0, 2.0 * float(args.pair_fine_step_px))
+    distant_scores = fine_scores[np.abs(fine_offsets - best_offset) >= exclusion]
+    peak_prominence = float(fine_scores[best_index] - np.nanmax(distant_scores)) if distant_scores.size else float("nan")
+    center_on_search_boundary = bool(
+        best_index == 0 or best_index == len(fine_offsets) - 1
+    )
+    return (
+        reference + best_offset,
+        float(fine_scores[best_index]),
+        peak_prominence,
+        center_on_search_boundary,
+        row_centers,
+        coarse_offsets,
+        coarse_scores,
+        fine_offsets,
+        fine_scores,
+    )
+
+
 def main(args):
     threads = configure_threads(args.threads)
-    try:
-        import tomopy
-    except ModuleNotFoundError as exc:
-        raise SystemExit("TomoPy is not installed in the active environment") from exc
-
-    try:
-        import numexpr
-
-        numexpr.set_num_threads(threads)
-    except (ImportError, ValueError):
-        pass
+    tomopy = None
+    if args.method in {"vo", "scipy"}:
+        try:
+            import tomopy
+        except ModuleNotFoundError as exc:
+            raise SystemExit("TomoPy is not installed in the active environment") from exc
+        try:
+            import numexpr
+            numexpr.set_num_threads(threads)
+        except (ImportError, ValueError):
+            pass
 
     input_dir = args.input_dir.resolve()
     if args.config is None:
@@ -114,6 +259,107 @@ def main(args):
     print(f"Read {len(paths)} TIFFs from {input_dir}")
     print(f"Processed projections: {processed_all.shape}")
     print(f"Using detector rows: {indices.tolist()}")
+
+    if args.method == "pair":
+        if len(processed_all) != len(angles) + 1:
+            raise SystemExit(
+                "Endpoint-pair center finding requires a genuine 0/180 duplicate endpoint. "
+                "Use --keep_duplicate_endpoint only when the input contains it."
+            )
+        (
+            center_px,
+            pair_score,
+            peak_prominence,
+            center_on_search_boundary,
+            row_centers,
+            coarse_offsets,
+            coarse_scores,
+            fine_offsets,
+            fine_scores,
+        ) = find_center_by_endpoint_pair(processed_all[[0, -1]], indices, args)
+        center_reference = projections.shape[2] / 2.0
+        retained_centers = row_centers[np.isfinite(row_centers)]
+        if retained_centers.size == 0:
+            raise SystemExit("Endpoint-pair center finding found no usable detector rows")
+        p10 = float(np.percentile(retained_centers, 10))
+        p90 = float(np.percentile(retained_centers, 90))
+        spread = p90 - p10
+        offset_px = center_reference - float(center_px)
+        detector_pixel_u = float(args.pixel_size * args.pixel_subsample)
+        offset_u = offset_px * detector_pixel_u
+        center_valid = bool(
+            np.isfinite(pair_score)
+            and pair_score >= args.pair_min_score
+            and np.isfinite(peak_prominence)
+            and peak_prominence >= args.pair_min_peak_prominence
+            and spread <= args.pair_max_center_spread_px
+            and not center_on_search_boundary
+        )
+
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        csv_path = args.output.with_suffix(".csv")
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["slice", "center_px"])
+            writer.writeheader()
+            for row, value in zip(indices, row_centers):
+                writer.writerow(
+                    {"slice": int(row), "center_px": "" if not np.isfinite(value) else float(value)}
+                )
+        scan_path = args.output.with_name(args.output.stem + "_scan.csv")
+        with scan_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle, fieldnames=["offset_px", "center_px", "pair_score", "stage"]
+            )
+            writer.writeheader()
+            for offset, score in zip(coarse_offsets, coarse_scores):
+                writer.writerow(
+                    {"offset_px": float(offset), "center_px": float(center_reference + offset), "pair_score": float(score), "stage": "coarse"}
+                )
+            for offset, score in zip(fine_offsets, fine_scores):
+                writer.writerow(
+                    {"offset_px": float(offset), "center_px": float(center_reference + offset), "pair_score": float(score), "stage": "fine"}
+                )
+        result = {
+            "offDetector": [float(offset_u), 0.0],
+            "center_px": float(center_px),
+            "center_reference_px": float(center_reference),
+            "offset_px": float(offset_px),
+            "detector_pixel_u": float(detector_pixel_u),
+            "center_p10": p10,
+            "center_p90": p90,
+            "center_spread_px": float(spread),
+            "pair_score": float(pair_score),
+            "pair_peak_prominence": peak_prominence,
+            "pair_min_score": float(args.pair_min_score),
+            "pair_min_peak_prominence": float(args.pair_min_peak_prominence),
+            "pair_max_center_spread_px": float(args.pair_max_center_spread_px),
+            "center_on_search_boundary": center_on_search_boundary,
+            "center_valid": center_valid,
+            "n_tiff": len(paths),
+            "processed_shape": [int(x) for x in processed_all.shape],
+            "input_dir": str(input_dir),
+            "input_type": args.input_type,
+            "shift_v": args.shift_v,
+            "pixel_subsample": args.pixel_subsample,
+            "projection_scale": args.projection_scale,
+            "pixel_size": args.pixel_size,
+            "method": "endpoint_pair",
+            "per_slice_csv": str(csv_path.resolve()),
+            "scan_csv": str(scan_path.resolve()),
+        }
+        with args.output.open("w", encoding="utf-8") as handle:
+            json.dump(result, handle, indent=2)
+        print(f"Endpoint-pair center: {center_px:.6f} pixels")
+        print(f"Endpoint-pair correlation: {pair_score:.6f}")
+        print(f"Endpoint-pair peak prominence: {peak_prominence:.6f}")
+        print(f"Endpoint-pair per-row center spread: {spread:.6f} pixels")
+        print(f"Absolute detector offset: {offset_px:+.6f} pixels")
+        print(f"Set scanner.offDetector[0] to approximately {offset_u:.8g}")
+        print(f"Saved center JSON: {args.output}")
+        print(f"Saved center scan: {scan_path}")
+        if not center_valid:
+            print("WARNING: endpoint-pair center is not valid; inspect the CSV diagnostics before FBP.")
+        return
 
     init_px = projections.shape[2] / 2.0 if args.init_px is None else args.init_px
     centers = []
