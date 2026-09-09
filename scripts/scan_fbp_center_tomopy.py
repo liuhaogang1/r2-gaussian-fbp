@@ -18,7 +18,20 @@ from scripts.fbp_preprocess import build_angles, process_projection
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_dir", type=Path, required=True)
+    parser.add_argument("--input_dir", type=Path, default=None)
+    parser.add_argument(
+        "--processed_npy",
+        type=Path,
+        default=None,
+        help="Preprocessed projections, shape (views, detector_v, detector_u). "
+        "When supplied, TIFF reading and per-image preprocessing are skipped.",
+    )
+    parser.add_argument(
+        "--angles_npy",
+        type=Path,
+        default=None,
+        help="Angles in radians corresponding to --processed_npy.",
+    )
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--angle_start", type=float, default=0.0)
     parser.add_argument("--angle_interval", type=float, default=0.5)
@@ -227,17 +240,37 @@ def main(args):
         except (ImportError, ValueError):
             pass
 
-    input_dir = args.input_dir.resolve()
-    if args.config is None:
-        config_candidates = sorted(input_dir.glob("*.txt"))
-        args.config = config_candidates[0] if len(config_candidates) == 1 else None
-    paths = sorted(input_dir.glob("*.tif")) + sorted(input_dir.glob("*.tiff"))
-    if not paths:
-        raise ValueError(f"No TIFF files found in {input_dir}")
+    if args.processed_npy is not None:
+        processed_all = np.asarray(np.load(args.processed_npy), dtype=np.float32)
+        if processed_all.ndim != 3:
+            raise ValueError(
+                f"--processed_npy must contain a 3D array, got {processed_all.shape}"
+            )
+        if args.angles_npy is None:
+            raise ValueError("--angles_npy is required with --processed_npy")
+        angles = np.asarray(np.load(args.angles_npy), dtype=np.float32).reshape(-1)
+        if len(angles) not in {len(processed_all), len(processed_all) - 1}:
+            raise ValueError(
+                "The number of angles must match the views, or be one fewer "
+                "when the final 180-degree endpoint is retained"
+            )
+        paths = [Path(f"processed_{index:04d}.npy") for index in range(len(processed_all))]
+        input_dir = args.processed_npy.resolve().parent
+        print(f"Read preprocessed projections from {args.processed_npy}")
+    else:
+        if args.input_dir is None:
+            raise ValueError("--input_dir is required unless --processed_npy is supplied")
+        input_dir = args.input_dir.resolve()
+        if args.config is None:
+            config_candidates = sorted(input_dir.glob("*.txt"))
+            args.config = config_candidates[0] if len(config_candidates) == 1 else None
+        paths = sorted(input_dir.glob("*.tif")) + sorted(input_dir.glob("*.tiff"))
+        if not paths:
+            raise ValueError(f"No TIFF files found in {input_dir}")
 
-    raw = [tifffile.imread(path) for path in paths]
-    processed_all = np.stack([process_projection(image, args) for image in raw], axis=0)
-    angles = build_angles(args, len(processed_all))
+        raw = [tifffile.imread(path) for path in paths]
+        processed_all = np.stack([process_projection(image, args) for image in raw], axis=0)
+        angles = build_angles(args, len(processed_all))
     if len(angles) < 2:
         raise ValueError("At least two projection angles are required")
     projections = processed_all[: len(angles)]
@@ -250,13 +283,22 @@ def main(args):
 
     n_slices = projections.shape[1]
     margin = max(0, int(args.slice_margin))
+    if 2 * margin >= n_slices:
+        # A pixel-subsampled detector can be much smaller than the original
+        # full-resolution default margin. Keep a valid interior automatically.
+        margin = max(1, n_slices // 10)
+        args.slice_margin = margin
+        print(
+            f"Adjusted slice_margin to {margin} for detector height {n_slices}",
+            flush=True,
+        )
     indices = np.arange(margin, n_slices - margin, max(1, int(args.slice_step)))
     if indices.size == 0:
         raise ValueError("No detector rows remain after slice_margin")
     if args.max_slices > 0 and indices.size > args.max_slices:
         selected = np.linspace(0, indices.size - 1, args.max_slices).round().astype(int)
         indices = indices[selected]
-    print(f"Read {len(paths)} TIFFs from {input_dir}")
+    print(f"Read {len(paths)} views from {input_dir}")
     print(f"Processed projections: {processed_all.shape}")
     print(f"Using detector rows: {indices.tolist()}")
 
