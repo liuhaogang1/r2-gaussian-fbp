@@ -178,6 +178,38 @@ def save_split(output, name, indices, projections, angles):
     return records
 
 
+def save_center_slices(volume, output_dir, prefix):
+    """Save center X/Y/Z slices for quick visual inspection."""
+    import matplotlib.pyplot as plt
+
+    volume = np.nan_to_num(np.asarray(volume, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    finite = volume[np.isfinite(volume)]
+    positive = finite[finite > 0]
+    if positive.size:
+        low, high = np.percentile(positive, [1.0, 99.5])
+    elif finite.size:
+        low, high = float(finite.min()), float(finite.max())
+    else:
+        low, high = 0.0, 1.0
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        low, high = 0.0, max(float(np.max(volume)), 1.0)
+    display = np.clip((volume - low) / max(high - low, 1e-12), 0.0, 1.0)
+    centers = [int(size // 2) for size in display.shape]
+    planes = {
+        "x": display[centers[0], :, :].T,
+        "y": display[:, centers[1], :].T,
+        "z": display[:, :, centers[2]].T,
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for axis, plane in planes.items():
+        path = output_dir / f"{prefix}_center_{axis}.png"
+        plt.imsave(path, plane, cmap="gray", vmin=0.0, vmax=1.0)
+    print(
+        f"Saved {prefix} center slices to {output_dir} "
+        f"(window {float(low):.6g} ~ {float(high):.6g})"
+    )
+
+
 def make_dataset(args, corrected, angles):
     import tigre.algorithms as algs
 
@@ -211,6 +243,8 @@ def make_dataset(args, corrected, angles):
     np.save(args.output_dir / "vol_sparse75_fbp.npy", volume_sparse)
     # Keep the legacy Scene reader unchanged: vol_fbp.npy is the reference volume.
     np.save(args.output_dir / "vol_fbp.npy", volume_full)
+    save_center_slices(volume_full, args.output_dir, "vol_full_fbp")
+    save_center_slices(volume_sparse, args.output_dir, "vol_sparse75_fbp")
     train_records = save_split(args.output_dir, "proj_train", train_indices, projections, angles)
     test_records = save_split(args.output_dir, "proj_test", test_indices, projections, angles)
     step_angle = float(angles[1] - angles[0]) if len(angles) > 1 else 0.0

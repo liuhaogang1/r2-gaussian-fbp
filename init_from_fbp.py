@@ -1,9 +1,125 @@
 """Create an R2-Gaussian initialization point cloud from an FBP volume."""
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
+
+
+def reconstruct_from_train_views(dataset: Path) -> np.ndarray:
+    """Reconstruct an initialization volume from the dataset training views."""
+    metadata_path = dataset / "meta_data.json"
+    if not metadata_path.exists():
+        raise FileNotFoundError(
+            f"Cannot use --use_train_fbp: missing {metadata_path}"
+        )
+
+    with metadata_path.open("r", encoding="utf-8") as handle:
+        metadata = json.load(handle)
+
+    scanner_cfg = metadata.get("scanner")
+    train_records = metadata.get("proj_train")
+    if not isinstance(scanner_cfg, dict):
+        raise ValueError(f"Invalid or missing scanner configuration in {metadata_path}")
+    if not train_records:
+        raise ValueError(f"Dataset has no proj_train records: {metadata_path}")
+    if scanner_cfg.get("mode") != "parallel":
+        raise ValueError(
+            "--use_train_fbp currently supports only parallel-beam datasets"
+        )
+
+    projections = []
+    angles = []
+    projection_shape = None
+    for record in train_records:
+        if "file_path" not in record or "angle" not in record:
+            raise ValueError("Every proj_train record must contain file_path and angle")
+        relative_path = str(record["file_path"]).replace("\\", "/")
+        projection_path = dataset / relative_path
+        if not projection_path.exists():
+            raise FileNotFoundError(f"Missing training projection: {projection_path}")
+        projection = np.asarray(np.load(projection_path), dtype=np.float32)
+        if projection.ndim != 2:
+            raise ValueError(
+                f"Expected a 2D projection, got {projection.shape} from {projection_path}"
+            )
+        if projection_shape is None:
+            projection_shape = projection.shape
+        elif projection.shape != projection_shape:
+            raise ValueError(
+                "Training projections have inconsistent shapes: "
+                f"{projection_shape} and {projection.shape}"
+            )
+        projections.append(projection)
+        angles.append(float(record["angle"]))
+
+    # Import TIGRE only for the train-view FBP mode. Explicit-volume mode keeps
+    # the previous behavior and does not need to reconstruct a volume here.
+    from r2_gaussian.utils.ct_utils import get_geometry_tigre, recon_volume
+
+    projections_array = np.stack(projections, axis=0)
+    angles_array = np.asarray(angles, dtype=np.float32)
+    geometry = get_geometry_tigre(scanner_cfg)
+    volume = recon_volume(projections_array, angles_array, geometry, "fbp")
+    volume = np.asarray(volume, dtype=np.float32)
+    volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
+    return volume
+
+
+def load_initial_volume(args: argparse.Namespace) -> tuple[np.ndarray, Path]:
+    """Load an explicit volume or reconstruct/cache one from training views."""
+    if args.use_train_fbp:
+        if args.dataset is None:
+            raise ValueError("--dataset is required when --use_train_fbp is set")
+        if args.volume is not None:
+            raise ValueError("Do not combine --volume with --use_train_fbp")
+
+        dataset = args.dataset.resolve()
+        fbp_output = (
+            args.fbp_output.resolve()
+            if args.fbp_output is not None
+            else dataset / "vol_train_fbp.npy"
+        )
+        if fbp_output.exists():
+            print(f"Load cached train-view FBP volume: {fbp_output}")
+            volume = np.asarray(np.load(fbp_output), dtype=np.float32)
+        else:
+            print(f"Reconstruct train-view FBP volume from: {dataset}")
+            volume = reconstruct_from_train_views(dataset)
+            fbp_output.parent.mkdir(parents=True, exist_ok=True)
+            np.save(fbp_output, volume)
+            print(f"Saved train-view FBP cache to {fbp_output}")
+        if volume.ndim != 3:
+            raise ValueError(f"Expected a 3D FBP volume, got {volume.shape}")
+        expected_shape = tuple(int(value) for value in dataset_shape_from_metadata(dataset))
+        if expected_shape and volume.shape != expected_shape:
+            raise ValueError(
+                f"Cached train-view FBP shape {volume.shape} does not match "
+                f"scanner nVoxel {expected_shape}: {fbp_output}"
+            )
+        return volume, fbp_output
+
+    if args.dataset is not None:
+        raise ValueError("--dataset requires --use_train_fbp")
+    if args.fbp_output is not None:
+        raise ValueError("--fbp_output requires --use_train_fbp")
+    if args.volume is None:
+        raise ValueError(
+            "--volume is required unless --use_train_fbp and --dataset are provided"
+        )
+    return np.asarray(np.load(args.volume), dtype=np.float32), args.volume.resolve()
+
+
+def dataset_shape_from_metadata(dataset: Path) -> tuple[int, ...]:
+    """Read the expected volume shape without importing the reconstruction stack."""
+    metadata_path = dataset / "meta_data.json"
+    with metadata_path.open("r", encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    n_voxel = metadata.get("scanner", {}).get("nVoxel")
+    if not n_voxel:
+        return ()
+    return tuple(int(value) for value in n_voxel)
 
 
 def save_initialization_slices(
@@ -104,7 +220,29 @@ def visualize_initial_point_cloud(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--volume", type=Path, required=True)
+    parser.add_argument(
+        "--volume",
+        type=Path,
+        default=None,
+        help="Explicit 3D reconstruction volume (.npy). Required unless --use_train_fbp is set.",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=None,
+        help="Prepared dataset directory containing meta_data.json and proj_train.",
+    )
+    parser.add_argument(
+        "--use_train_fbp",
+        action="store_true",
+        help="Reconstruct the initialization volume from the dataset training views.",
+    )
+    parser.add_argument(
+        "--fbp_output",
+        type=Path,
+        default=None,
+        help="Optional cached train-view FBP path; defaults to <dataset>/vol_train_fbp.npy.",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -156,7 +294,7 @@ def main():
     )
     args = parser.parse_args()
 
-    volume = np.load(args.volume).astype(np.float32)
+    volume, volume_path = load_initial_volume(args)
     if volume.ndim != 3:
         raise ValueError(f"Expected a 3D volume, got {volume.shape}")
     volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
@@ -187,7 +325,7 @@ def main():
     densities = volume[tuple(selected.T)] * args.density_rescale
     point_cloud = np.concatenate([positions, densities[:, None]], axis=1).astype(np.float32)
 
-    canonical_output = args.volume.parent / f"init_{args.volume.parent.name}.npy"
+    canonical_output = volume_path.parent / f"init_{volume_path.parent.name}.npy"
     output = args.output if args.output is not None else canonical_output
     output.parent.mkdir(parents=True, exist_ok=True)
     np.save(output, point_cloud)
