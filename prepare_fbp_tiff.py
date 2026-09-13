@@ -69,14 +69,12 @@ def build_parallel_geometry(args, detector_shape):
     geo.sVoxel = np.asarray(args.sVoxel[::-1], dtype=np.float32)
     geo.dVoxel = geo.sVoxel / geo.nVoxel
     geo.offOrigin = np.asarray(args.offOrigin[::-1], dtype=np.float32)
-    # The pipeline metadata uses the public convention [u, v], where u is the
-    # projection-column direction and v is the projection-row direction.
-    # TIGRE's geometry object used by this FBP path consumes the detector
-    # offset in its internal [v, u, 0] order.  Keep this conversion here so a
-    # center scan's offDetector[0] actually shifts the reconstruction axis.
-    geo.offDetector = np.asarray(
-        [args.offDetector[1], args.offDetector[0]], dtype=np.float32
-    )
+    # The project-wide convention is [u, v]: u is the projection-column
+    # direction (the rotation-center direction), and v is the projection-row
+    # direction.  Keep this order when passing the offset to TIGRE.  The
+    # center scanners write [u, v] and the camera-pose code consumes [u, v] as
+    # well; swapping here would make FBP use a different physical offset.
+    geo.offDetector = np.asarray(args.offDetector, dtype=np.float32)
     geo.accuracy = float(args.accuracy)
     geo.filter = args.filter
     return geo

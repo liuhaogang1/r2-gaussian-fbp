@@ -159,7 +159,9 @@ def build_geometry(args, detector_shape, off_detector):
     geo.sVoxel = np.asarray(args.sVoxel[::-1], dtype=np.float32)
     geo.dVoxel = geo.sVoxel / geo.nVoxel
     geo.offOrigin = np.asarray(args.offOrigin[::-1], dtype=np.float32)
-    geo.offDetector = np.asarray([off_detector[1], off_detector[0]], dtype=np.float32)
+    # ``off_detector`` is the project-wide [u, v] convention.  In particular,
+    # the rotation-center correction is off_detector[0] along detector columns.
+    geo.offDetector = np.asarray(off_detector, dtype=np.float32)
     geo.accuracy = float(args.accuracy)
     geo.filter = args.filter
     return geo

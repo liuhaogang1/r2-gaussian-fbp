@@ -51,8 +51,11 @@ def get_geometry_tigre(cfg):
     geo.dVoxel = geo.sVoxel / geo.nVoxel  # total size of the image
     # Offsets
     geo.offOrigin = np.array(cfg["offOrigin"][::-1])  # Offset of image from origin
+    # Scanner metadata stores detector offsets as [u, v], with u along the
+    # projection-column/rotation-center direction.  Keep that order here so
+    # FBP and the camera-pose path apply the same physical translation.
     geo.offDetector = np.array(
-        [cfg["offDetector"][1], cfg["offDetector"][0], 0]
+        [cfg["offDetector"][0], cfg["offDetector"][1], 0]
     )  # Offset of Detector
     # Auxiliary
     geo.accuracy = cfg["accuracy"]  # Accuracy of FWD proj
