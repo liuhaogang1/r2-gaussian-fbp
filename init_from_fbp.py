@@ -24,9 +24,10 @@ def reconstruct_from_train_views(dataset: Path) -> np.ndarray:
         raise ValueError(f"Invalid or missing scanner configuration in {metadata_path}")
     if not train_records:
         raise ValueError(f"Dataset has no proj_train records: {metadata_path}")
-    if scanner_cfg.get("mode") != "parallel":
+    if scanner_cfg.get("mode") not in {"parallel", "cone"}:
         raise ValueError(
-            "--use_train_fbp currently supports only parallel-beam datasets"
+            "scanner.mode must be 'parallel' or 'cone', got "
+            f"{scanner_cfg.get('mode')!r} in {metadata_path}"
         )
 
     projections = []
@@ -120,6 +121,53 @@ def dataset_shape_from_metadata(dataset: Path) -> tuple[int, ...]:
     if not n_voxel:
         return ()
     return tuple(int(value) for value in n_voxel)
+
+
+def dataset_scanner_from_metadata(dataset: Path) -> dict:
+    """Read the scanner metadata needed for a Slicer-viewable FBP volume."""
+    metadata_path = dataset / "meta_data.json"
+    with metadata_path.open("r", encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    scanner_cfg = metadata.get("scanner")
+    if not isinstance(scanner_cfg, dict):
+        raise ValueError(f"Invalid or missing scanner configuration in {metadata_path}")
+    return scanner_cfg
+
+
+def save_fbp_nifti(
+    volume: np.ndarray,
+    output: Path,
+    scanner_cfg: dict,
+) -> None:
+    """Save the complete train-view FBP volume as a Slicer-viewable NIfTI."""
+    try:
+        import SimpleITK as sitk
+    except ModuleNotFoundError as error:
+        raise SystemExit(
+            "SimpleITK is required for --visualize_fbp_nii. "
+            "Install it with: python -m pip install SimpleITK"
+        ) from error
+
+    volume = np.asarray(volume, dtype=np.float32)
+    if volume.ndim != 3:
+        raise ValueError(f"Expected a 3D FBP volume, got {volume.shape}")
+    volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
+    volume = np.clip(volume, 0.0, None)
+
+    s_voxel = np.asarray(scanner_cfg.get("sVoxel"), dtype=np.float64)
+    if s_voxel.shape != (3,) or not np.all(np.isfinite(s_voxel)) or np.any(s_voxel <= 0):
+        raise ValueError("Scanner metadata must contain three positive sVoxel values")
+    spacing = tuple(
+        float(size) / float(count) for size, count in zip(s_voxel, volume.shape)
+    )
+
+    # The project stores volumes as [X, Y, Z]; match prepare_fbp_tiff.py when
+    # converting to the [Z, X, Y] array convention used by SimpleITK here.
+    image = sitk.GetImageFromArray(volume.transpose(2, 0, 1))
+    image.SetSpacing(spacing)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    sitk.WriteImage(image, str(output))
+    print(f"Saved train-view FBP NIfTI to {output}")
 
 
 def save_initialization_slices(
@@ -292,13 +340,42 @@ def main():
         default=None,
         help="Slice image path. Defaults to <output_stem>_slices.png.",
     )
+    parser.add_argument(
+        "--visualize_fbp_nii",
+        action="store_true",
+        help="Save the complete train-view FBP volume as a Slicer-viewable .nii.gz.",
+    )
+    parser.add_argument(
+        "--fbp_nii_output",
+        type=Path,
+        default=None,
+        help=(
+            "NIfTI output path for --visualize_fbp_nii; defaults to "
+            "<fbp_output_stem>.nii.gz."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.fbp_nii_output is not None and not args.visualize_fbp_nii:
+        raise ValueError("--fbp_nii_output requires --visualize_fbp_nii")
+    if args.visualize_fbp_nii and not args.use_train_fbp:
+        raise ValueError("--visualize_fbp_nii requires --use_train_fbp")
 
     volume, volume_path = load_initial_volume(args)
     if volume.ndim != 3:
         raise ValueError(f"Expected a 3D volume, got {volume.shape}")
     volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
     volume = np.clip(volume, 0.0, None)
+
+    if args.visualize_fbp_nii:
+        nii_output = args.fbp_nii_output
+        if nii_output is None:
+            nii_output = volume_path.with_suffix(".nii.gz")
+        save_fbp_nifti(
+            volume,
+            nii_output.resolve(),
+            dataset_scanner_from_metadata(args.dataset.resolve()),
+        )
 
     if args.normalize_percentile > 0:
         positive = volume[volume > 0]

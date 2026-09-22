@@ -66,7 +66,16 @@ python run_pipeline.py \
 
 ## 分阶段运行
 
-四个脚本也可以单独运行。FBP 输出目录必须是新的空目录；初始化脚本默认使用 `vol_fbp.npy`，并可单独打开 `--visualize` 或 `--visualize_slices`。
+四个脚本也可以单独运行。FBP 输出目录必须是新的空目录；初始化脚本默认使用 `vol_fbp.npy`，并可单独打开 `--visualize` 或 `--visualize_slices`。使用训练视角重建时，可以额外用 `--visualize_fbp_nii` 将完整的稀疏视角 FBP 体导出为 3D Slicer 可读取的 NIfTI：
+
+```bash
+python init_from_fbp.py \
+  --dataset /path/to/dataset \
+  --use_train_fbp \
+  --visualize_fbp_nii
+```
+
+默认生成 `<dataset>/vol_train_fbp.nii.gz`；也可以用 `--fbp_nii_output /path/to/train_fbp.nii.gz` 指定路径。该文件保存的是完整 FBP 体，不是阈值筛选后的初始化点云。
 
 ```bash
 python prepare_fbp_tiff.py --help

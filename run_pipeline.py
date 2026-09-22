@@ -56,9 +56,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--center_search_min_px", type=float, default=-100.0)
     parser.add_argument("--center_search_max_px", type=float, default=100.0)
     parser.add_argument("--input_type", choices=["transmission", "intensity", "line_integral"], default="line_integral")
+    parser.add_argument(
+        "--mode",
+        choices=["parallel", "cone"],
+        default="parallel",
+        help="Scanner geometry: parallel uses TIGRE FBP, cone uses TIGRE FDK.",
+    )
+    parser.add_argument(
+        "--i0_mode",
+        choices=["percentile", "free_ray", "fixed"],
+        default="percentile",
+        help="I0 estimation for transmission input; free_ray follows the HelTomo/FIPS convention.",
+    )
+    parser.add_argument(
+        "--free_ray",
+        nargs=4,
+        type=int,
+        default=[0, 128, 0, 128],
+        metavar=("ROW0", "ROW1", "COL0", "COL1"),
+        help="Unattenuated detector patch used by --i0_mode free_ray",
+    )
+    parser.add_argument("--i0", type=float, default=1.0)
+    parser.add_argument("--i0_percentile", type=float, default=99.5)
+    parser.add_argument("--i0_hi_percentile", type=float, default=99.9)
     parser.add_argument("--angle_interval", type=float, default=0.5)
     parser.add_argument("--shift_v", type=int, default=0)
     parser.add_argument("--pixel_subsample", type=int, default=4)
+    parser.add_argument(
+        "--recon_pixel_subsample",
+        type=int,
+        default=None,
+        help="Optional detector subsampling used only for the FBP/FDK volume.",
+    )
     parser.add_argument("--resize_order", type=int, choices=[0, 1, 3], default=1)
     parser.add_argument("--projection_scale", type=float, default=0.125)
     parser.add_argument("--pixel_size", type=float, default=0.02)
@@ -102,6 +131,11 @@ def main(args: argparse.Namespace) -> None:
             str(ROOT / "scripts" / "scan_fbp_center_tomopy.py"),
             "--input_dir", str(input_dir),
             "--input_type", args.input_type,
+            "--i0_mode", args.i0_mode,
+            "--i0", str(args.i0),
+            "--i0_percentile", str(args.i0_percentile),
+            "--i0_hi_percentile", str(args.i0_hi_percentile),
+            "--free_ray", *map(str, args.free_ray),
             "--angle_interval", str(args.angle_interval),
             "--shift_v", str(args.shift_v),
             "--pixel_subsample", str(args.center_pixel_subsample),
@@ -137,6 +171,12 @@ def main(args: argparse.Namespace) -> None:
         "--input_dir", str(input_dir),
         "--output_dir", str(output_dir),
         "--input_type", args.input_type,
+        "--mode", args.mode,
+        "--i0_mode", args.i0_mode,
+        "--i0", str(args.i0),
+        "--i0_percentile", str(args.i0_percentile),
+        "--i0_hi_percentile", str(args.i0_hi_percentile),
+        "--free_ray", *map(str, args.free_ray),
         "--angle_interval", str(args.angle_interval),
         "--shift_v", str(args.shift_v),
         "--pixel_subsample", str(args.pixel_subsample),
@@ -154,6 +194,8 @@ def main(args: argparse.Namespace) -> None:
     ]
     if args.config is not None:
         fbp_command += ["--config", str(args.config.resolve())]
+    if args.recon_pixel_subsample is not None:
+        fbp_command += ["--recon_pixel_subsample", str(args.recon_pixel_subsample)]
     if center_json is not None:
         fbp_command += ["--center_json", str(center_json)]
     elif manual_off_detector is not None:

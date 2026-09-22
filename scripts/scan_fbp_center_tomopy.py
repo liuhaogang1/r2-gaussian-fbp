@@ -42,7 +42,21 @@ def parse_args():
         default="line_integral",
     )
     parser.add_argument("--i0", type=float, default=1.0)
+    parser.add_argument(
+        "--i0_mode",
+        choices=["percentile", "free_ray", "fixed"],
+        default="percentile",
+        help="Must match prepare_fbp_tiff.py so the center search sees the same data.",
+    )
+    parser.add_argument(
+        "--free_ray",
+        nargs=4,
+        type=int,
+        default=[0, 128, 0, 128],
+        metavar=("ROW0", "ROW1", "COL0", "COL1"),
+    )
     parser.add_argument("--i0_percentile", type=float, default=99.5)
+    parser.add_argument("--i0_hi_percentile", type=float, default=99.9)
     parser.add_argument("--zero_policy", choices=["nearest", "clip", "keep"], default="nearest")
     parser.add_argument("--log_eps", type=float, default=1e-6)
     parser.add_argument("--clip_percentile", type=float, default=99.9)
@@ -381,6 +395,9 @@ def main(args):
             "processed_shape": [int(x) for x in processed_all.shape],
             "input_dir": str(input_dir),
             "input_type": args.input_type,
+            "i0_mode": args.i0_mode,
+            "i0": float(args.i0),
+            "free_ray": [int(value) for value in args.free_ray],
             "shift_v": args.shift_v,
             "pixel_subsample": args.pixel_subsample,
             "projection_scale": args.projection_scale,

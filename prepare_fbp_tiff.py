@@ -13,7 +13,12 @@ import numpy as np
 import tifffile
 import tigre
 import tigre.algorithms as algs
-from scripts.fbp_preprocess import build_angles, parse_config, process_projection
+from scripts.fbp_preprocess import (
+    build_angles,
+    parse_config,
+    parse_free_ray,
+    process_projection,
+)
 
 
 def save_fbp_preview(output, volume, s_voxel, preview_percentiles=(1.0, 99.5)):
@@ -51,12 +56,20 @@ def save_fbp_preview(output, volume, s_voxel, preview_percentiles=(1.0, 99.5)):
     return float(low), float(high)
 
 
-def build_parallel_geometry(args, detector_shape):
+def build_geometry(args, detector_shape):
+    """Build the TIGRE geometry for parallel FBP or cone FDK.
+
+    ``args.pixel_size`` is always the *reconstruction-plane* pixel pitch in the
+    same length unit as ``DSD``/``DSO``/``sVoxel``.  For a cone-beam scan this
+    is the pixel size at the rotation axis, i.e. the detector pixel pitch
+    divided by the geometric magnification ``DSD / DSO``.
+    """
     height, width = detector_shape
     effective_pixel_size = args.pixel_size * args.pixel_subsample
-    geo = tigre.geometry(
-        mode="parallel", nVoxel=np.asarray(args.nVoxel[::-1], dtype=np.int32)
-    )
+    mode = args.mode
+    if mode not in {"parallel", "cone"}:
+        raise ValueError(f"Unsupported scanner mode: {mode}")
+    geo = tigre.geometry(mode=mode, nVoxel=np.asarray(args.nVoxel[::-1], dtype=np.int32))
     geo.DSD = float(args.DSD)
     geo.DSO = float(args.DSO)
     geo.nDetector = np.asarray([height, width], dtype=np.int32)
@@ -80,6 +93,15 @@ def build_parallel_geometry(args, detector_shape):
     return geo
 
 
+def reconstruct_volume(projections, angles, args, geo):
+    """FBP for parallel-beam geometry, FDK for cone-beam geometry."""
+    if args.mode == "cone":
+        volume_tigre = algs.fdk(projections[:, ::-1, :], geo, angles)
+    else:
+        volume_tigre = algs.fbp(projections[:, ::-1, :], geo, angles)
+    return np.transpose(volume_tigre, (2, 1, 0)).astype(np.float32)
+
+
 def save_split(output, name, indices, projections, angles):
     directory = output / name
     directory.mkdir(parents=True, exist_ok=True)
@@ -96,11 +118,59 @@ def save_split(output, name, indices, projections, angles):
     return records
 
 
+def reconstruct_with_optional_subsample(args, projections, angles, raw_images):
+    """Reconstruct in an optionally coarser geometry than the saved views.
+
+    ``--recon_pixel_subsample`` only affects the analytical reconstruction.
+    The saved ``proj_train``/``proj_test`` files keep ``--pixel_subsample`` so
+    that changing the reconstruction cost never changes the training data.
+    ``raw_images`` must already have the duplicate endpoint removed, i.e. it
+    corresponds one-to-one with ``projections`` and ``angles``.
+    """
+    recon_subsample = (
+        args.pixel_subsample
+        if args.recon_pixel_subsample is None
+        else args.recon_pixel_subsample
+    )
+    if recon_subsample == args.pixel_subsample:
+        geometry_args = args
+        reconstruction_input = projections
+    else:
+        if raw_images is None:
+            raise ValueError(
+                "--recon_pixel_subsample requires the unprocessed projections"
+            )
+        if len(raw_images) != len(projections):
+            raise ValueError(
+                f"Got {len(raw_images)} raw views for {len(projections)} projections"
+            )
+        geometry_args = argparse.Namespace(**vars(args))
+        geometry_args.pixel_subsample = recon_subsample
+        reconstruction_input = np.stack(
+            [process_projection(image, geometry_args) for image in raw_images],
+            axis=0,
+        )
+        print(
+            f"Reconstruction detector {recon_subsample}x subsampled: "
+            f"{tuple(reconstruction_input.shape[1:])}",
+            flush=True,
+        )
+    geo = build_geometry(geometry_args, reconstruction_input.shape[1:])
+    volume = reconstruct_volume(reconstruction_input, angles, geometry_args, geo)
+    return volume, recon_subsample, args.mode == "cone"
+
+
 def main(args):
     args.input_dir = Path(args.input_dir)
     args.output_dir = Path(args.output_dir)
     args.config = Path(args.config) if args.config else None
     args.center_json = Path(args.center_json) if args.center_json else None
+    if args.pixel_subsample < 1:
+        raise ValueError("--pixel_subsample must be at least 1")
+    if args.recon_pixel_subsample is not None and args.recon_pixel_subsample < 1:
+        raise ValueError("--recon_pixel_subsample must be at least 1")
+    if args.mode == "cone" and float(args.DSD) <= float(args.DSO):
+        raise ValueError("--mode cone requires DSD > DSO")
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
         raise FileExistsError(
             f"FBP output directory is not fresh: {args.output_dir}. "
@@ -133,9 +203,19 @@ def main(args):
     if not paths:
         raise ValueError(f"No TIFF files found in {args.input_dir}")
 
-    projections_all = np.stack(
-        [process_projection(tifffile.imread(path), args) for path in paths], axis=0
-    )
+    # --recon_pixel_subsample needs the raw TIFFs again, so keep them only when
+    # that option is actually used.
+    full_resolution = None
+    if args.recon_pixel_subsample is not None:
+        full_resolution = [tifffile.imread(path) for path in paths]
+        projections_all = np.stack(
+            [process_projection(image, args) for image in full_resolution], axis=0
+        )
+    else:
+        projections_all = np.stack(
+            [process_projection(tifffile.imread(path), args) for path in paths],
+            axis=0,
+        )
     angles = build_angles(args, len(projections_all))
     config_values = parse_config(args.config)
     angle_interval = float(config_values.get("AngleInterval", args.angle_interval))
@@ -146,6 +226,10 @@ def main(args):
     )
     endpoint_pair = projections_all[[0, -1]].copy() if removed_endpoint else None
     projections = projections_all[: len(angles)]
+    if full_resolution is not None:
+        # Keep the raw views aligned with 'projections' so that
+        # --recon_pixel_subsample cannot reintroduce the dropped endpoint.
+        full_resolution = full_resolution[: len(angles)]
     if len(angles) < 2:
         raise ValueError("At least two projection angles are required")
     total_angle = angle_interval * len(angles) if removed_endpoint else float(
@@ -158,11 +242,25 @@ def main(args):
     if endpoint_pair is not None:
         np.save(output / "proj_endpoint_pair.npy", endpoint_pair)
 
-    geo = build_parallel_geometry(args, projections.shape[1:])
-    volume_tigre = algs.fbp(projections[:, ::-1, :], geo, angles)
-    volume_raw = np.transpose(volume_tigre, (2, 1, 0)).astype(np.float32)
+    volume_raw, recon_subsample, cone_geometry = reconstruct_with_optional_subsample(
+        args, projections, angles, full_resolution
+    )
+    del full_resolution
     volume_raw = np.nan_to_num(volume_raw, nan=0.0, posinf=0.0, neginf=0.0)
     volume = np.clip(volume_raw, 0.0, None)
+    positive_fraction = float(np.count_nonzero(volume) / volume.size)
+    if positive_fraction < 0.001:
+        # The classic cause is feeding raw transmission counts as line
+        # integrals: FBP then returns a nearly flat, mostly negative volume
+        # that clips to (almost) nothing.  Fail loudly instead of saving it.
+        raise ValueError(
+            "The reconstructed volume is essentially empty "
+            f"({positive_fraction:.4%} of voxels are positive). "
+            f"Check --input_type (currently {args.input_type!r}): transmission "
+            "data needs 'transmission', already-log-transformed data needs "
+            "'line_integral'. Also check --i0_mode/--i0, --pixel_size and the "
+            "reconstruction filter."
+        )
     np.save(output / "vol_fbp_raw.npy", volume_raw)
     np.save(output / "vol_fbp.npy", volume)
     preview_low, preview_high = save_fbp_preview(
@@ -185,7 +283,7 @@ def main(args):
     test_records = save_split(output, "proj_test", test_indices, projections, angles)
 
     scanner = {
-        "mode": "parallel",
+        "mode": args.mode,
         "DSD": float(args.DSD),
         "DSO": float(args.DSO),
         "nDetector": [int(x) for x in projections.shape[1:]],
@@ -201,7 +299,7 @@ def main(args):
         "totalAngle": float(total_angle),
         "startAngle": float(np.rad2deg(angles[0])),
         "noise": False,
-        "filter": args.filter,
+        "filter": args.filter if args.mode == "parallel" else None,
     }
     metadata = {
         "scanner": scanner,
@@ -215,18 +313,28 @@ def main(args):
         "proj_test": test_records,
         "source": {
             "input_dir": str(args.input_dir.resolve()),
-            "algorithm": "TIGRE parallel-beam FBP",
+            "algorithm": (
+                "TIGRE cone-beam FDK" if args.mode == "cone" else "TIGRE parallel-beam FBP"
+            ),
+            "mode": args.mode,
             "n_views": len(angles),
             "angles_all": [float(angle) for angle in angles],
             "removed_duplicate_endpoint": bool(removed_endpoint),
             "input_type": args.input_type,
             "i0": float(args.i0),
+            "i0_mode": args.i0_mode,
             "i0_percentile": float(args.i0_percentile),
+            "i0_hi_percentile": float(args.i0_hi_percentile),
+            "free_ray": [int(x) for x in parse_free_ray(args.free_ray)],
             "zero_policy": args.zero_policy,
             "shift_v": int(args.shift_v),
             "pixel_subsample": int(args.pixel_subsample),
+            "recon_pixel_subsample": (
+                None if recon_subsample == args.pixel_subsample else int(recon_subsample)
+            ),
             "input_pixel_size": float(args.pixel_size),
             "effective_pixel_size": float(args.pixel_size * args.pixel_subsample),
+            "recon_pixel_size": float(args.pixel_size * recon_subsample),
             "projection_scale": float(args.projection_scale),
             "endpoint_pair": "proj_endpoint_pair.npy" if endpoint_pair is not None else None,
             "center_json": str(args.center_json.resolve()) if args.center_json else None,
@@ -260,6 +368,17 @@ if __name__ == "__main__":
     parser.add_argument("--angle_interval", type=float, default=0.5)
     parser.add_argument("--keep_duplicate_endpoint", action="store_true")
     parser.add_argument(
+        "--mode",
+        choices=["parallel", "cone"],
+        default="parallel",
+        help=(
+            "Scanner geometry: parallel uses TIGRE FBP, cone uses TIGRE FDK. "
+            "For cone, --DSD/--DSO must be the physical source-detector and "
+            "source-origin distances and --pixel_size must be the detector "
+            "pitch at the rotation axis (pixel pitch / (DSD/DSO))."
+        ),
+    )
+    parser.add_argument(
         "--input_type",
         choices=["transmission", "intensity", "line_integral"],
         default="transmission",
@@ -269,7 +388,31 @@ if __name__ == "__main__":
         "--i0", type=float, default=1.0,
         help="Incident intensity; use 0 to estimate per view",
     )
+    parser.add_argument(
+        "--i0_mode",
+        choices=["percentile", "free_ray", "fixed"],
+        default="percentile",
+        help=(
+            "How I0 is estimated for transmission input: 'percentile' uses "
+            "--i0_percentile of the whole frame, 'free_ray' uses the mean of "
+            "--free_ray (the HelTomo/FIPS convention), 'fixed' uses --i0."
+        ),
+    )
+    parser.add_argument(
+        "--free_ray",
+        nargs=4,
+        type=int,
+        default=[0, 128, 0, 128],
+        metavar=("ROW0", "ROW1", "COL0", "COL1"),
+        help="Unattenuated detector patch used by --i0_mode free_ray",
+    )
     parser.add_argument("--i0_percentile", type=float, default=99.5)
+    parser.add_argument(
+        "--i0_hi_percentile",
+        type=float,
+        default=99.9,
+        help="Upper clamp for the free-ray I0 estimate",
+    )
     parser.add_argument(
         "--zero_policy", choices=["nearest", "clip", "keep"], default="nearest"
     )
@@ -280,6 +423,16 @@ if __name__ == "__main__":
         help="Detector-row shift; 5 matches the old real-data pipeline",
     )
     parser.add_argument("--pixel_subsample", type=int, default=1)
+    parser.add_argument(
+        "--recon_pixel_subsample",
+        type=int,
+        default=None,
+        help=(
+            "Optional detector subsampling used only for the FBP/FDK volume; "
+            "defaults to --pixel_subsample. proj_train/proj_test keep "
+            "--pixel_subsample."
+        ),
+    )
     parser.add_argument("--resize_order", type=int, choices=[0, 1, 3], default=1)
     parser.add_argument("--projection_scale", type=float, default=1.0)
     parser.add_argument("--n_train", type=int, default=50)
