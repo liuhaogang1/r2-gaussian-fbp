@@ -221,26 +221,49 @@ def make_dataset(args, corrected, angles):
         projections = corrected
     else:
         raise ValueError("Corrected projection count and angle count are inconsistent")
-    if len(projections) < 75:
-        raise ValueError("At least 75 unique views are required")
+    if len(projections) < args.train_views:
+        raise ValueError(
+            f"At least {args.train_views} unique views are required"
+        )
     full_indices = np.arange(len(projections), dtype=np.int64)
-    train_indices = np.linspace(0, len(projections) - 1, 75).round().astype(np.int64)
+    train_indices = np.linspace(
+        0, len(projections) - 1, args.train_views
+    ).round().astype(np.int64)
     train_indices = np.unique(train_indices)
-    if len(train_indices) != 75:
-        raise ValueError("The uniform 75-view selection was not unique")
+    if len(train_indices) != args.train_views:
+        raise ValueError(
+            f"The uniform {args.train_views}-view selection was not unique"
+        )
     remaining = sorted(set(full_indices.tolist()) - set(train_indices.tolist()))
     rng = random.Random(args.seed)
-    test_indices = np.asarray(sorted(rng.sample(remaining, min(args.n_test, len(remaining)))), dtype=np.int64)
-    sparse = projections[train_indices]
+    if args.n_test > len(remaining):
+        raise ValueError(
+            f"n_test={args.n_test} exceeds the {len(remaining)} remaining views"
+        )
+    test_indices = np.asarray(
+        sorted(rng.sample(remaining, args.n_test)), dtype=np.int64
+    )
+    sparse_indices = np.linspace(
+        0, len(projections) - 1, args.sparse_views
+    ).round().astype(np.int64)
+    sparse_indices = np.unique(sparse_indices)
+    if len(sparse_indices) != args.sparse_views:
+        raise ValueError(
+            f"The uniform {args.sparse_views}-view selection was not unique"
+        )
+    sparse = projections[sparse_indices]
     geo = build_geometry(args, projections.shape[1:], args.offDetector)
     volume_full = np.transpose(algs.fbp(projections[:, ::-1, :], geo, angles), (2, 1, 0)).astype(np.float32)
-    volume_sparse = np.transpose(algs.fbp(sparse[:, ::-1, :], geo, angles[train_indices]), (2, 1, 0)).astype(np.float32)
+    volume_sparse = np.transpose(
+        algs.fbp(sparse[:, ::-1, :], geo, angles[sparse_indices]),
+        (2, 1, 0),
+    ).astype(np.float32)
     volume_full = np.nan_to_num(volume_full, nan=0.0, posinf=0.0, neginf=0.0)
     volume_sparse = np.nan_to_num(volume_sparse, nan=0.0, posinf=0.0, neginf=0.0)
     volume_full = np.clip(volume_full, 0.0, None)
     volume_sparse = np.clip(volume_sparse, 0.0, None)
     np.save(args.output_dir / "proj_all.npy", projections)
-    np.save(args.output_dir / "proj_sparse75.npy", sparse)
+    np.save(args.output_dir / f"proj_sparse{args.sparse_views}.npy", sparse)
     np.save(args.output_dir / "vol_full_fbp.npy", volume_full)
     np.save(args.output_dir / "vol_sparse75_fbp.npy", volume_sparse)
     # Keep the legacy Scene reader unchanged: vol_fbp.npy is the reference volume.
@@ -273,7 +296,10 @@ def make_dataset(args, corrected, angles):
             "input_dir": str(args.input_dir.resolve()), "algorithm": "TIGRE parallel-beam FBP",
             "n_views": len(angles), "angles_all": [float(x) for x in angles],
             "train_indices": train_indices.tolist(), "test_indices": test_indices.tolist(),
-            "sparse_views": 75, "input_type": "flat_corrected_intensity",
+            "train_views": int(args.train_views),
+            "sparse_views": int(args.sparse_views),
+            "sparse_indices": sparse_indices.tolist(),
+            "input_type": "flat_corrected_intensity",
             "offDetector": [float(x) for x in args.offDetector],
             "center_json": str(args.center_json.resolve()) if args.center_json else None,
         },
@@ -313,6 +339,14 @@ def parse_args():
     parser.add_argument("--accuracy", type=float, default=0.5)
     parser.add_argument("--filter", choices=["ram_lak", "shepp_logan", "cosine", "hamming", "hann"], default="hann")
     parser.add_argument("--n_test", type=int, default=105)
+    parser.add_argument(
+        "--train_views", type=int, default=75,
+        help="Number of views written to proj_train; set 180 for full-view training.",
+    )
+    parser.add_argument(
+        "--sparse_views", type=int, default=75,
+        help="Number of views used for the sparse FBP volume.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args()
 

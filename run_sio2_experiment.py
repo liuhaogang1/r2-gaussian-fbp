@@ -30,6 +30,9 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--skip_train", action="store_true")
     parser.add_argument("--skip_test", action="store_true")
+    parser.add_argument("--skip_render_train", action="store_true")
+    parser.add_argument("--skip_render_test", action="store_true")
+    parser.add_argument("--skip_recon", action="store_true")
     return parser.parse_args()
 
 
@@ -60,10 +63,17 @@ def main(args):
             "--iterations", str(args.iterations),
         ])
     if not args.skip_test:
-        run([
+        test_command = [
             sys.executable, str(ROOT / "test.py"),
             "-s", str(dataset), "-m", str(model), "--iteration", "-1",
-        ])
+        ]
+        if args.skip_render_train:
+            test_command.append("--skip_render_train")
+        if args.skip_render_test:
+            test_command.append("--skip_render_test")
+        if args.skip_recon:
+            test_command.append("--skip_recon")
+        run(test_command)
 
 
 if __name__ == "__main__":
