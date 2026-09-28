@@ -15,13 +15,17 @@ import tigre
 import tigre.algorithms as algs
 from scripts.fbp_preprocess import (
     build_angles,
+    load_flat_field,
     parse_config,
     parse_free_ray,
     process_projection,
+    select_tiff_paths,
 )
 
 
-def save_fbp_preview(output, volume, s_voxel, preview_percentiles=(1.0, 99.5)):
+def save_fbp_preview(
+    output, volume, s_voxel, preview_percentiles=(1.0, 99.5), prefix="vol_fbp"
+):
     """Save immediately viewable orthogonal slices and a correctly scaled NIfTI."""
     import SimpleITK as sitk
     from PIL import Image
@@ -45,14 +49,14 @@ def save_fbp_preview(output, volume, s_voxel, preview_percentiles=(1.0, 99.5)):
     }
     for axis, plane in planes.items():
         Image.fromarray(np.round(plane * 255.0).astype(np.uint8)).save(
-            output / f"vol_fbp_preview_{axis}.png"
+            output / f"{prefix}_preview_{axis}.png"
         )
 
     # Keep the full dynamic range for Slicer; PNGs are only for quick viewing.
     preview_image = sitk.GetImageFromArray(volume.transpose(2, 0, 1))
     spacing = tuple(float(size) / float(count) for size, count in zip(s_voxel, volume.shape))
     preview_image.SetSpacing(spacing)
-    sitk.WriteImage(preview_image, str(output / "vol_fbp_preview.nii.gz"))
+    sitk.WriteImage(preview_image, str(output / f"{prefix}_preview.nii.gz"))
     return float(low), float(high)
 
 
@@ -118,7 +122,7 @@ def save_split(output, name, indices, projections, angles):
     return records
 
 
-def reconstruct_with_optional_subsample(args, projections, angles, raw_images):
+def reconstruct_with_optional_subsample(args, projections, angles, raw_images, flat_field=None):
     """Reconstruct in an optionally coarser geometry than the saved views.
 
     ``--recon_pixel_subsample`` only affects the analytical reconstruction.
@@ -147,7 +151,7 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images):
         geometry_args = argparse.Namespace(**vars(args))
         geometry_args.pixel_subsample = recon_subsample
         reconstruction_input = np.stack(
-            [process_projection(image, geometry_args) for image in raw_images],
+            [process_projection(image, geometry_args, flat=flat_field) for image in raw_images],
             axis=0,
         )
         print(
@@ -176,6 +180,21 @@ def main(args):
             f"FBP output directory is not fresh: {args.output_dir}. "
             "Use a new empty directory for every independent run."
         )
+    if args.flat_field and args.projection_glob is None:
+        args.projection_glob = "Tomo_*.tiff"
+    paths = select_tiff_paths(args.input_dir, args.projection_glob)
+    if not paths:
+        raise ValueError(
+            f"No projection TIFF files found in {args.input_dir}"
+            + (f" matching {args.projection_glob}" if args.projection_glob else "")
+        )
+    flat_paths = []
+    flat_field = None
+    if args.flat_field:
+        flat_pattern = args.flat_glob or "Flat_*.tiff"
+        flat_paths = select_tiff_paths(args.input_dir, flat_pattern)
+        flat_field = load_flat_field(flat_paths, args.dark_value)
+        print(f"Using {len(flat_paths)} flat-field TIFF files (median correction).")
     if args.center_json is not None:
         with args.center_json.open("r", encoding="utf-8") as handle:
             center_result = json.load(handle)
@@ -198,32 +217,26 @@ def main(args):
         config_candidates = sorted(args.input_dir.glob("*.txt"))
         args.config = config_candidates[0] if len(config_candidates) == 1 else None
 
-    paths = sorted(args.input_dir.glob("*.tif"))
-    paths += sorted(args.input_dir.glob("*.tiff"))
-    if not paths:
-        raise ValueError(f"No TIFF files found in {args.input_dir}")
-
     # --recon_pixel_subsample needs the raw TIFFs again, so keep them only when
     # that option is actually used.
     full_resolution = None
     if args.recon_pixel_subsample is not None:
         full_resolution = [tifffile.imread(path) for path in paths]
         projections_all = np.stack(
-            [process_projection(image, args) for image in full_resolution], axis=0
+            [process_projection(image, args, flat=flat_field) for image in full_resolution], axis=0
         )
     else:
         projections_all = np.stack(
-            [process_projection(tifffile.imread(path), args) for path in paths],
+            [process_projection(tifffile.imread(path), args, flat=flat_field) for path in paths],
             axis=0,
         )
+    angles_all = build_angles(
+        args, len(projections_all), preserve_duplicate_endpoint=True
+    )
     angles = build_angles(args, len(projections_all))
     config_values = parse_config(args.config)
     angle_interval = float(config_values.get("AngleInterval", args.angle_interval))
-    removed_endpoint = (
-        not args.keep_duplicate_endpoint
-        and len(paths) == len(angles) + 1
-        and np.isclose(angle_interval * len(angles), 180.0, atol=1e-3)
-    )
+    removed_endpoint = len(angles_all) != len(angles)
     endpoint_pair = projections_all[[0, -1]].copy() if removed_endpoint else None
     projections = projections_all[: len(angles)]
     if full_resolution is not None:
@@ -238,14 +251,40 @@ def main(args):
 
     output = args.output_dir
     output.mkdir(parents=True, exist_ok=True)
+    if args.preprocess_only:
+        np.save(output / "proj_preprocessed_all.npy", projections_all)
+        np.save(output / "angles_all.npy", angles_all)
+        np.save(output / "angles_unique.npy", angles)
+        if endpoint_pair is not None:
+            np.save(output / "proj_endpoint_pair.npy", endpoint_pair)
+        with (output / "preprocess_meta.json").open("w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "projection_files": [path.name for path in paths],
+                    "flat_files": [path.name for path in flat_paths],
+                    "projection_glob": args.projection_glob,
+                    "flat_glob": args.flat_glob,
+                    "flat_field": bool(args.flat_field),
+                    "dark_value": float(args.dark_value),
+                    "flat_eps": float(args.flat_eps),
+                    "processed_shape": [int(x) for x in projections_all.shape],
+                    "angles_all": [float(x) for x in angles_all],
+                    "angles_unique": [float(x) for x in angles],
+                    "removed_duplicate_endpoint": bool(removed_endpoint),
+                },
+                handle,
+                indent=2,
+            )
+        print(f"Saved preprocessed projections: {output / 'proj_preprocessed_all.npy'}")
+        print(f"Saved unique-view angles: {output / 'angles_unique.npy'}")
+        return
     np.save(output / "proj_all.npy", projections)
     if endpoint_pair is not None:
         np.save(output / "proj_endpoint_pair.npy", endpoint_pair)
 
     volume_raw, recon_subsample, cone_geometry = reconstruct_with_optional_subsample(
-        args, projections, angles, full_resolution
+        args, projections, angles, full_resolution, flat_field=flat_field
     )
-    del full_resolution
     volume_raw = np.nan_to_num(volume_raw, nan=0.0, posinf=0.0, neginf=0.0)
     volume = np.clip(volume_raw, 0.0, None)
     positive_fraction = float(np.count_nonzero(volume) / volume.size)
@@ -268,6 +307,57 @@ def main(args):
         volume,
         args.sVoxel,
     )
+
+    sparse_indices = None
+    sparse_output = None
+    if args.sparse_views is not None:
+        if args.sparse_views < 2:
+            raise ValueError("--sparse_views must be at least 2 when enabled")
+        if args.sparse_views > len(angles):
+            raise ValueError(
+                f"--sparse_views={args.sparse_views} exceeds {len(angles)} unique views"
+            )
+        sparse_indices = np.linspace(
+            0, len(angles) - 1, args.sparse_views
+        ).round().astype(np.int64)
+        sparse_indices = np.unique(sparse_indices)
+        if len(sparse_indices) != args.sparse_views:
+            raise ValueError("The uniform sparse-view selection was not unique")
+        sparse_projections = projections[sparse_indices]
+        sparse_angles = angles[sparse_indices]
+        sparse_raw = (
+            [full_resolution[index] for index in sparse_indices]
+            if full_resolution is not None
+            else None
+        )
+        sparse_raw_volume, _, _ = reconstruct_with_optional_subsample(
+            args,
+            sparse_projections,
+            sparse_angles,
+            sparse_raw,
+            flat_field=flat_field,
+        )
+        sparse_volume = np.clip(
+            np.nan_to_num(sparse_raw_volume, nan=0.0, posinf=0.0, neginf=0.0),
+            0.0,
+            None,
+        )
+        sparse_output = (
+            args.sparse_fbp_output
+            if args.sparse_fbp_output is not None
+            else output / f"vol_sparse{args.sparse_views}_fbp.npy"
+        )
+        sparse_output = Path(sparse_output)
+        if not sparse_output.is_absolute():
+            sparse_output = output / sparse_output
+        sparse_output.parent.mkdir(parents=True, exist_ok=True)
+        np.save(sparse_output, sparse_volume)
+        save_fbp_preview(
+            output, sparse_volume, args.sVoxel, prefix=sparse_output.stem
+        )
+        print(f"Saved sparse FBP volume: {sparse_output}")
+
+    del full_resolution
 
     rng = random.Random(args.seed)
     train_indices = np.linspace(0, len(angles) - 1, args.n_train).round().astype(int)
@@ -336,6 +426,16 @@ def main(args):
             "effective_pixel_size": float(args.pixel_size * args.pixel_subsample),
             "recon_pixel_size": float(args.pixel_size * recon_subsample),
             "projection_scale": float(args.projection_scale),
+            "projection_glob": args.projection_glob,
+            "flat_glob": args.flat_glob,
+            "flat_field": bool(args.flat_field),
+            "flat_files": [path.name for path in flat_paths],
+            "dark_value": float(args.dark_value),
+            "flat_eps": float(args.flat_eps),
+            "preprocess_only": False,
+            "sparse_views": None if sparse_indices is None else int(len(sparse_indices)),
+            "sparse_indices": None if sparse_indices is None else sparse_indices.tolist(),
+            "sparse_fbp": None if sparse_output is None else str(sparse_output.resolve()),
             "endpoint_pair": "proj_endpoint_pair.npy" if endpoint_pair is not None else None,
             "center_json": str(args.center_json.resolve()) if args.center_json else None,
         },
@@ -359,6 +459,28 @@ if __name__ == "__main__":
     parser.add_argument("--input_dir", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--config", default=None)
+    parser.add_argument(
+        "--projection_glob",
+        default=None,
+        help="Optional projection filename glob; comma-separated globs are allowed.",
+    )
+    parser.add_argument(
+        "--flat_glob",
+        default=None,
+        help="Flat-field filename glob, used only with --flat_field.",
+    )
+    parser.add_argument(
+        "--flat_field",
+        action="store_true",
+        help="Apply dark-subtracted median flat-field correction before input conversion.",
+    )
+    parser.add_argument("--dark_value", type=float, default=0.0)
+    parser.add_argument("--flat_eps", type=float, default=1e-6)
+    parser.add_argument(
+        "--preprocess_only",
+        action="store_true",
+        help="Save processed projections/angles and stop before FBP and dataset splitting.",
+    )
     parser.add_argument(
         "--center_json",
         default=None,
@@ -437,6 +559,17 @@ if __name__ == "__main__":
     parser.add_argument("--projection_scale", type=float, default=1.0)
     parser.add_argument("--n_train", type=int, default=50)
     parser.add_argument("--n_test", type=int, default=100)
+    parser.add_argument(
+        "--sparse_views",
+        type=int,
+        default=None,
+        help="Optionally reconstruct an additional uniformly sampled sparse-view FBP volume.",
+    )
+    parser.add_argument(
+        "--sparse_fbp_output",
+        default=None,
+        help="Optional sparse FBP .npy path; defaults to vol_sparse<N>_fbp.npy in output_dir.",
+    )
     parser.add_argument("--nVoxel", nargs=3, type=int, default=[128, 128, 128])
     parser.add_argument("--sVoxel", nargs=3, type=float, default=[2.0, 2.0, 2.0])
     parser.add_argument("--offOrigin", nargs=3, type=float, default=[0.0, 0.0, 0.0])

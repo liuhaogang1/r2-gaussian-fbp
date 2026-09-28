@@ -36,7 +36,59 @@ def parse_config(path):
     return values
 
 
-def build_angles(args, n_views):
+def select_tiff_paths(input_dir, projection_glob=None):
+    """Select projection TIFFs while preserving the legacy default."""
+    input_dir = Path(input_dir)
+    if projection_glob:
+        patterns = [item.strip() for item in str(projection_glob).split(",") if item.strip()]
+        paths = []
+        seen = set()
+        for pattern in patterns:
+            for path in sorted(input_dir.glob(pattern)):
+                key = str(path.resolve())
+                if key not in seen:
+                    paths.append(path)
+                    seen.add(key)
+        return paths
+    return sorted(input_dir.glob("*.tif")) + sorted(input_dir.glob("*.tiff"))
+
+
+def load_flat_field(flat_paths, dark_value=0.0):
+    """Return the median flat-field image as float32."""
+    if not flat_paths:
+        raise ValueError("Flat-field correction requested, but no flat TIFF files were found")
+    import tifffile
+
+    raw_flat = [np.asarray(tifffile.imread(path), dtype=np.float32) for path in flat_paths]
+    shape = raw_flat[0].shape
+    if any(image.shape != shape for image in raw_flat):
+        raise ValueError("Flat-field TIFF files have inconsistent shapes")
+    flat = np.median(np.stack(raw_flat, axis=0), axis=0).astype(np.float32)
+    if not np.isfinite(flat).any():
+        raise ValueError("Flat-field contains no finite pixels")
+    return flat
+
+
+def correct_flat_field(image, flat, dark_value=0.0, flat_eps=1e-6):
+    """Apply dark-subtracted flat-field correction and fill invalid pixels."""
+    image = np.asarray(image, dtype=np.float32)
+    flat = np.asarray(flat, dtype=np.float32)
+    if image.shape != flat.shape:
+        raise ValueError(
+            f"Projection and flat-field shapes differ: {image.shape} vs {flat.shape}"
+        )
+    denominator = flat - np.float32(dark_value)
+    valid_flat = denominator > float(flat_eps)
+    if not valid_flat.any():
+        raise ValueError("Flat-field contains no valid pixels")
+    denominator = np.maximum(denominator, np.float32(flat_eps))
+    corrected = (image - np.float32(dark_value)) / denominator
+    corrected = np.nan_to_num(corrected, nan=0.0, posinf=1.0, neginf=0.0)
+    bad = (~valid_flat) | (~np.isfinite(corrected)) | (corrected <= 0)
+    return fill_nearest(corrected, bad)
+
+
+def build_angles(args, n_views, preserve_duplicate_endpoint=False):
     config = parse_config(args.config)
     start = float(config.get("AngleFirst", args.angle_start))
     interval = float(config.get("AngleInterval", args.angle_interval))
@@ -48,7 +100,8 @@ def build_angles(args, n_views):
 
     angles_deg = start + np.arange(n_views, dtype=np.float32) * interval
     if (
-        not args.keep_duplicate_endpoint
+        not preserve_duplicate_endpoint
+        and not args.keep_duplicate_endpoint
         and len(angles_deg) > 1
         and np.isclose(angles_deg[-1] - angles_deg[0], 180.0, atol=1e-4)
     ):
@@ -99,7 +152,7 @@ def estimate_free_ray_i0(image, free_ray, hi_percentile):
     return patch_mean
 
 
-def process_projection(image, args):
+def process_projection(image, args, flat=None):
     image = np.asarray(image, dtype=np.float32)
     finite = np.isfinite(image)
     if not finite.any():
@@ -108,6 +161,16 @@ def process_projection(image, args):
     finite_values = image[finite]
     cap = float(np.percentile(finite_values, args.clip_percentile))
     image = np.nan_to_num(image, nan=0.0, posinf=cap, neginf=0.0)
+
+    if getattr(args, "flat_field", False):
+        if flat is None:
+            raise ValueError("--flat_field requires a loaded flat-field image")
+        image = correct_flat_field(
+            image,
+            flat,
+            dark_value=float(getattr(args, "dark_value", 0.0)),
+            flat_eps=float(getattr(args, "flat_eps", 1e-6)),
+        )
 
     if args.input_type in {"transmission", "intensity"}:
         bad = image <= 0

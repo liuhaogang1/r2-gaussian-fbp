@@ -13,12 +13,22 @@ import tifffile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from scripts.fbp_preprocess import build_angles, process_projection
+from scripts.fbp_preprocess import (
+    build_angles,
+    load_flat_field,
+    process_projection,
+    select_tiff_paths,
+)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_dir", type=Path, default=None)
+    parser.add_argument("--projection_glob", default=None)
+    parser.add_argument("--flat_glob", default=None)
+    parser.add_argument("--flat_field", action="store_true")
+    parser.add_argument("--dark_value", type=float, default=0.0)
+    parser.add_argument("--flat_eps", type=float, default=1e-6)
     parser.add_argument(
         "--processed_npy",
         type=Path,
@@ -31,6 +41,12 @@ def parse_args():
         type=Path,
         default=None,
         help="Angles in radians corresponding to --processed_npy.",
+    )
+    parser.add_argument(
+        "--endpoint_pair_npy",
+        type=Path,
+        default=None,
+        help="Optional (2,H,W) 0/180 endpoint pair saved by prepare_fbp_tiff.py.",
     )
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--angle_start", type=float, default=0.0)
@@ -254,6 +270,7 @@ def main(args):
         except (ImportError, ValueError):
             pass
 
+    endpoint_pair = None
     if args.processed_npy is not None:
         processed_all = np.asarray(np.load(args.processed_npy), dtype=np.float32)
         if processed_all.ndim != 3:
@@ -271,6 +288,8 @@ def main(args):
         paths = [Path(f"processed_{index:04d}.npy") for index in range(len(processed_all))]
         input_dir = args.processed_npy.resolve().parent
         print(f"Read preprocessed projections from {args.processed_npy}")
+        if args.endpoint_pair_npy is not None:
+            endpoint_pair = np.asarray(np.load(args.endpoint_pair_npy), dtype=np.float32)
     else:
         if args.input_dir is None:
             raise ValueError("--input_dir is required unless --processed_npy is supplied")
@@ -278,21 +297,48 @@ def main(args):
         if args.config is None:
             config_candidates = sorted(input_dir.glob("*.txt"))
             args.config = config_candidates[0] if len(config_candidates) == 1 else None
-        paths = sorted(input_dir.glob("*.tif")) + sorted(input_dir.glob("*.tiff"))
+        if args.flat_field and args.projection_glob is None:
+            args.projection_glob = "Tomo_*.tiff"
+        paths = select_tiff_paths(input_dir, args.projection_glob)
         if not paths:
             raise ValueError(f"No TIFF files found in {input_dir}")
+        flat_field = None
+        flat_paths = []
+        if args.flat_field:
+            flat_paths = select_tiff_paths(
+                input_dir, args.flat_glob or "Flat_*.tiff"
+            )
+            flat_field = load_flat_field(flat_paths, args.dark_value)
 
         raw = [tifffile.imread(path) for path in paths]
-        processed_all = np.stack([process_projection(image, args) for image in raw], axis=0)
+        processed_all = np.stack(
+            [process_projection(image, args, flat=flat_field) for image in raw], axis=0
+        )
         angles = build_angles(args, len(processed_all))
+        if args.endpoint_pair_npy is not None:
+            endpoint_pair = np.asarray(np.load(args.endpoint_pair_npy), dtype=np.float32)
+
+    if endpoint_pair is None and len(processed_all) == len(angles) + 1:
+        endpoint_pair = processed_all[[0, -1]]
+
+    if endpoint_pair is not None:
+        if endpoint_pair.ndim != 3 or endpoint_pair.shape[0] != 2:
+            raise ValueError(
+                f"--endpoint_pair_npy must contain shape (2,H,W), got {endpoint_pair.shape}"
+            )
+        if endpoint_pair.shape[1:] != processed_all.shape[1:]:
+            raise ValueError(
+                "Endpoint-pair detector shape does not match processed projections: "
+                f"{endpoint_pair.shape[1:]} vs {processed_all.shape[1:]}"
+            )
     if len(angles) < 2:
         raise ValueError("At least two projection angles are required")
     projections = processed_all[: len(angles)]
 
     # VO needs the actual 0/180 pair. TIGRE FBP will use only unique views.
     vo_projections = projections
-    if args.method == "vo" and len(processed_all) == len(angles) + 1:
-        vo_projections = processed_all
+    if args.method == "vo" and endpoint_pair is not None:
+        vo_projections = np.concatenate([projections, endpoint_pair[-1:]], axis=0)
         print("Using the original 180-degree endpoint for find_center_vo.")
 
     n_slices = projections.shape[1]
@@ -317,10 +363,12 @@ def main(args):
     print(f"Using detector rows: {indices.tolist()}")
 
     if args.method == "pair":
-        if len(processed_all) != len(angles) + 1:
+        if endpoint_pair is None and len(processed_all) == len(angles) + 1:
+            endpoint_pair = processed_all[[0, -1]]
+        if endpoint_pair is None:
             raise SystemExit(
                 "Endpoint-pair center finding requires a genuine 0/180 duplicate endpoint. "
-                "Use --keep_duplicate_endpoint only when the input contains it."
+                "Pass --endpoint_pair_npy or use --keep_duplicate_endpoint only when the input contains it."
             )
         (
             center_px,
@@ -332,7 +380,7 @@ def main(args):
             coarse_scores,
             fine_offsets,
             fine_scores,
-        ) = find_center_by_endpoint_pair(processed_all[[0, -1]], indices, args)
+        ) = find_center_by_endpoint_pair(endpoint_pair, indices, args)
         center_reference = projections.shape[2] / 2.0
         retained_centers = row_centers[np.isfinite(row_centers)]
         if retained_centers.size == 0:
@@ -394,6 +442,13 @@ def main(args):
             "n_tiff": len(paths),
             "processed_shape": [int(x) for x in processed_all.shape],
             "input_dir": str(input_dir),
+            "processed_npy": str(args.processed_npy.resolve()) if args.processed_npy else None,
+            "endpoint_pair_npy": str(args.endpoint_pair_npy.resolve()) if args.endpoint_pair_npy else None,
+            "projection_glob": args.projection_glob,
+            "flat_glob": args.flat_glob,
+            "flat_field": bool(args.flat_field),
+            "dark_value": float(args.dark_value),
+            "flat_eps": float(args.flat_eps),
             "input_type": args.input_type,
             "i0_mode": args.i0_mode,
             "i0": float(args.i0),
@@ -533,6 +588,13 @@ def main(args):
         "n_tiff": len(paths),
         "processed_shape": [int(x) for x in processed_all.shape],
         "input_dir": str(input_dir),
+        "processed_npy": str(args.processed_npy.resolve()) if args.processed_npy else None,
+        "endpoint_pair_npy": str(args.endpoint_pair_npy.resolve()) if args.endpoint_pair_npy else None,
+        "projection_glob": args.projection_glob,
+        "flat_glob": args.flat_glob,
+        "flat_field": bool(args.flat_field),
+        "dark_value": float(args.dark_value),
+        "flat_eps": float(args.flat_eps),
         "input_type": args.input_type,
         "shift_v": args.shift_v,
         "pixel_subsample": args.pixel_subsample,
