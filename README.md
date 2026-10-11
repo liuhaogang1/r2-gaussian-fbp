@@ -48,6 +48,21 @@ python run_pipeline.py \
   --iterations 30000
 ```
 
+位姿矫正是可选分支，默认关闭；原有训练命令不变。平行束实验可以在训练时额外传入：
+
+```bash
+python train.py -s /path/to/dataset -m /path/to/model \
+  --ply_path /path/to/init.npy \
+  --config configs/pose_parallel.yaml
+```
+使用 `run_pipeline.py` 时，将同一个配置传给 `--train_config`；若配置开启位姿，
+管线会在测试阶段自动加载本次训练生成的 `pose_offsets.npz`。
+
+锥束实验使用 `configs/pose_cone.yaml`。开启位姿分支前，需要先在当前
+PyTorch/CUDA 环境中运行 `scripts/build_pose_rasterizer.ps1`；默认流程继续使用
+现有的 rasterizer，不受新扩展影响。位姿结果保存在模型目录的
+`pose_calibration/` 下，原始 `meta_data.json` 不会被覆盖。
+
 如果没有中心 JSON，删除 `--center_json`，脚本会先调用 `scan_fbp_center_tomopy.py`，并把中心结果写到输出目录同级的 `<output_dir_name>_center.json`。这要求当前环境安装 TomoPy。
 
 流程会生成：

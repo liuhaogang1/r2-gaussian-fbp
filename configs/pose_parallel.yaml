@@ -1,0 +1,18 @@
+# Optional parallel-beam pose calibration.
+# Keep pose_enabled=false for the original training behavior.
+pose_enabled: true
+pose_mode: parallel
+
+parallel_optimize_angle: true
+parallel_optimize_global_detector_shift: true
+parallel_optimize_per_view_detector_shift: true
+parallel_optimize_beam_tilt: true
+parallel_optimize_detector_roll: true
+
+parallel_angle_max_deg: 0.5
+parallel_detector_shift_max_pixel: 3.0
+parallel_beam_tilt_max_deg: 0.5
+parallel_detector_roll_max_deg: 0.5
+
+pose_lr: 0.0001
+pose_lambda_smooth: 0.1

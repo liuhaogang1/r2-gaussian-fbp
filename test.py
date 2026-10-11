@@ -33,6 +33,7 @@ from r2_gaussian.dataset import Scene
 from r2_gaussian.gaussian import GaussianModel, render, query, initialize_gaussian
 from r2_gaussian.utils.general_utils import safe_state, t2a
 from r2_gaussian.utils.image_utils import metric_vol, metric_proj
+from r2_gaussian.pose import StaticConePose, StaticParallelPose
 
 
 def testing(
@@ -42,12 +43,51 @@ def testing(
     skip_render_train: bool,
     skip_render_test: bool,
     skip_recon: bool,
+    pose_result: str | None = None,
 ):
     # Set up dataset
     scene = Scene(
         dataset,
         shuffle=False,
     )
+
+    if pose_result:
+        scanner_mode = scene.scanner_cfg.get("mode")
+        if scanner_mode == "parallel":
+            static_pose = StaticParallelPose.from_npz(pose_result)
+            values = static_pose.values()
+            # Only angle/per-view-shift arrays encode the number of views;
+            # global shift, beam tilt and roll have lengths 2/1.
+            per_view = [
+                value
+                for key, value in values.items()
+                if key in ("delta_angle", "view_shift") and value is not None
+            ]
+            if per_view and any(
+                value.shape[0] != len(scene.train_cameras) for value in per_view
+            ):
+                raise ValueError(
+                    "Pose result per-view arrays do not match the number of training "
+                    f"{len(scene.train_cameras)} training views."
+                )
+            for pose_index, camera in enumerate(scene.train_cameras):
+                camera.attach_parallel_pose(static_pose, pose_index)
+        elif scanner_mode == "cone":
+            static_pose = StaticConePose.from_npz(pose_result)
+            values = static_pose.values()
+            per_view = [value for value in values.values() if value is not None]
+            if per_view and any(
+                value.shape[0] != len(scene.train_cameras) for value in per_view
+            ):
+                raise ValueError(
+                    "Pose result per-view arrays do not match the number of training "
+                    f"{len(scene.train_cameras)} training views."
+                )
+            for pose_index, camera in enumerate(scene.train_cameras):
+                camera.attach_cone_pose(static_pose, pose_index)
+        else:
+            raise ValueError(f"Unsupported scanner mode: {scanner_mode!r}")
+        pipeline.pose_enabled = True
 
     # Set up Gaussians
     gaussians = GaussianModel(None)  # scale_bound will be loaded later
@@ -231,6 +271,12 @@ if __name__ == "__main__":
     parser.add_argument("--skip_render_train", action="store_true", default=False)
     parser.add_argument("--skip_render_test", action="store_true", default=False)
     parser.add_argument("--skip_recon", action="store_true", default=False)
+    parser.add_argument(
+        "--pose_result",
+        type=str,
+        default=None,
+        help="Optional pose_calibration/pose_offsets.npz for train-view rendering.",
+    )
     args = get_combined_args(parser)
 
     safe_state(args.quiet)
@@ -243,4 +289,5 @@ if __name__ == "__main__":
             args.skip_render_train,
             args.skip_render_test,
             args.skip_recon,
+            args.pose_result,
         )

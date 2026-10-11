@@ -1,0 +1,7 @@
+# Cone-beam pose calibration using the target repository's parameterization.
+pose_enabled: true
+pose_mode: cone
+cone_optimize_translation: true
+cone_optimize_quaternion: true
+pose_lr: 0.0001
+pose_lambda_magnitude: 0.0

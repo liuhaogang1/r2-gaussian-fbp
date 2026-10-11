@@ -11,6 +11,7 @@
 
 import os
 import os.path as osp
+import csv
 import torch
 from random import randint
 import sys
@@ -29,6 +30,53 @@ from r2_gaussian.dataset import Scene
 from r2_gaussian.utils.loss_utils import l1_loss, ssim, tv_3d_loss
 from r2_gaussian.utils.image_utils import metric_vol, metric_proj
 from r2_gaussian.utils.plot_utils import show_two_slice
+from r2_gaussian.pose import ParallelPose, ConePose
+
+
+def save_pose_result(scene, pose_model):
+    """Save learned pose offsets without touching the input dataset."""
+    output_dir = osp.join(scene.model_path, "pose_calibration")
+    os.makedirs(output_dir, exist_ok=True)
+    values = {
+        key: value.detach().cpu().numpy()
+        for key, value in pose_model.values().items()
+        if value is not None
+    }
+    np.savez(osp.join(output_dir, "pose_offsets.npz"), **values)
+
+    # Cone-beam uses the target repository's translation/quaternion names.
+    if "delta_translation" in values or "delta_quaternion" in values:
+        np.savez(
+            osp.join(output_dir, "cone_pose_offsets.npz"),
+            **values,
+        )
+        return
+
+    delta_angle = values.get("delta_angle")
+    view_shift = values.get("view_shift")
+    global_shift = values.get("global_shift", np.zeros(2, dtype=np.float32))
+    angle_values = (
+        delta_angle
+        if delta_angle is not None
+        else np.zeros(len(scene.train_cameras), dtype=np.float32)
+    )
+    view_values = (
+        view_shift
+        if view_shift is not None
+        else np.zeros((len(scene.train_cameras), 2), dtype=np.float32)
+    )
+
+    with open(osp.join(output_dir, "pose_report.csv"), "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["view", "image", "angle_delta_rad", "shift_u_px", "shift_v_px"])
+        for index, camera in enumerate(scene.train_cameras):
+            writer.writerow([
+                index,
+                camera.image_name,
+                float(angle_values[index]),
+                float(global_shift[0] + view_values[index, 0]),
+                float(global_shift[1] + view_values[index, 1]),
+            ])
 
 
 def training(
@@ -45,6 +93,76 @@ def training(
 
     # Set up dataset
     scene = Scene(dataset, shuffle=False)
+    # The renderer receives this runtime-only flag through PipelineParams.
+    pipe.pose_enabled = bool(getattr(opt, "pose_enabled", False))
+
+    # Optional pose-calibration branch.  It is completely inactive unless
+    # pose_enabled is explicitly set in the config/CLI.
+    pose_model = None
+    pose_optimizer = None
+    if getattr(opt, "pose_enabled", False):
+        scanner_mode = scene.scanner_cfg.get("mode", "parallel")
+        pose_mode = getattr(opt, "pose_mode", "auto")
+        if pose_mode not in ("auto", scanner_mode):
+            raise ValueError(
+                f"pose_mode={pose_mode!r} does not match scanner mode={scanner_mode!r}"
+            )
+        if scanner_mode == "parallel":
+            pose_cfg = {
+                "optimize_angle": getattr(opt, "parallel_optimize_angle", False),
+                "optimize_global_detector_shift": getattr(
+                    opt, "parallel_optimize_global_detector_shift", False
+                ),
+                "optimize_per_view_detector_shift": getattr(
+                    opt, "parallel_optimize_per_view_detector_shift", False
+                ),
+                "optimize_beam_tilt": getattr(
+                    opt, "parallel_optimize_beam_tilt", False
+                ),
+                "optimize_detector_roll": getattr(
+                    opt, "parallel_optimize_detector_roll", False
+                ),
+                "angle_max_deg": getattr(opt, "parallel_angle_max_deg", 0.5),
+                "detector_shift_max_pixel": getattr(
+                    opt, "parallel_detector_shift_max_pixel", 3.0
+                ),
+                "beam_tilt_max_deg": getattr(
+                    opt, "parallel_beam_tilt_max_deg", 0.5
+                ),
+                "detector_roll_max_deg": getattr(
+                    opt, "parallel_detector_roll_max_deg", 0.5
+                ),
+            }
+            pose_model = ParallelPose(
+                len(scene.train_cameras), pose_cfg, device="cuda"
+            )
+        elif scanner_mode == "cone":
+            pose_model = ConePose(
+                len(scene.train_cameras),
+                {
+                    "optimize_translation": getattr(
+                        opt, "cone_optimize_translation", True
+                    ),
+                    "optimize_quaternion": getattr(
+                        opt, "cone_optimize_quaternion", True
+                    ),
+                },
+                device="cuda",
+            )
+        else:
+            raise ValueError(f"Unsupported scanner mode: {scanner_mode!r}")
+
+        trainable_pose_params = pose_model.optimizable_parameters()
+        if trainable_pose_params:
+            pose_optimizer = torch.optim.Adam(
+                trainable_pose_params,
+                lr=getattr(opt, "pose_lr", 1.0e-4),
+            )
+        for pose_index, camera in enumerate(scene.train_cameras):
+            if scanner_mode == "parallel":
+                camera.attach_parallel_pose(pose_model, pose_index)
+            else:
+                camera.attach_cone_pose(pose_model, pose_index)
 
     # Set up some parameters
     scanner_cfg = scene.scanner_cfg
@@ -141,6 +259,19 @@ def training(
             loss["tv"] = loss_tv
             loss["total"] = loss["total"] + opt.lambda_tv * loss_tv
 
+        if pose_model is not None:
+            loss_pose = pose_model.regularization()
+            loss["pose_smooth"] = loss_pose
+            pose_weight = (
+                getattr(opt, "pose_lambda_magnitude", 0.0)
+                if scene.scanner_cfg.get("mode") == "cone"
+                else getattr(opt, "pose_lambda_smooth", 0.1)
+            )
+            loss["total"] = (
+                loss["total"]
+                + pose_weight * loss_pose
+            )
+
         loss["total"].backward()
 
         iter_end.record()
@@ -175,6 +306,9 @@ def training(
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none=True)
+                if pose_optimizer is not None:
+                    pose_optimizer.step()
+                    pose_optimizer.zero_grad(set_to_none=True)
 
             # Save gaussians
             if iteration in saving_iterations or iteration == opt.iterations:
@@ -217,6 +351,9 @@ def training(
                 lambda x, y: render(x, y, pipe),
                 queryfunc,
             )
+
+    if pose_model is not None:
+        save_pose_result(scene, pose_model)
 
 
 def training_report(

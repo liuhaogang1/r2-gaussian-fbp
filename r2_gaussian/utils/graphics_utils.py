@@ -118,8 +118,10 @@ def getProjectionMatrix(fovX, fovY, mode, scanner_cfg):
     elif mode == 1:
         znear = 0.01
         zfar = 100.0
-        tanHalfFovY = math.tan((fovY / 2))
-        tanHalfFovX = math.tan((fovX / 2))
+        fovY = torch.as_tensor(fovY, dtype=torch.float32)
+        fovX = torch.as_tensor(fovX, dtype=torch.float32)
+        tanHalfFovY = torch.tan(fovY / 2)
+        tanHalfFovX = torch.tan(fovX / 2)
 
         top = tanHalfFovY * znear
         bottom = -top
@@ -140,6 +142,28 @@ def getProjectionMatrix(fovX, fovY, mode, scanner_cfg):
     else:
         raise ValueError("Unsupported mode!")
     return P
+
+
+def getParallelProjectionMatrix(detector_shift, scanner_cfg, device="cuda"):
+    """Build the affine projection used by the parallel-beam rasterizer.
+
+    ``detector_shift`` is in the normalized scene unit used by ``scanner_cfg``
+    (the dataset reader scales the physical scanner geometry before cameras
+    are constructed).  The sign convention is the same as the rasterizer's
+    normalized detector coordinates.
+    """
+    p = torch.eye(4, dtype=torch.float32, device=device)
+    shift_u = detector_shift[0]
+    shift_v = detector_shift[1]
+    detector_u = torch.as_tensor(
+        float(scanner_cfg["sDetector"][1]), device=device
+    )
+    detector_v = torch.as_tensor(
+        float(scanner_cfg["sDetector"][0]), device=device
+    )
+    p[0, 3] = 2.0 * shift_u / detector_u
+    p[1, 3] = 2.0 * shift_v / detector_v
+    return p
 
 
 def fov2focal(fov, pixels):

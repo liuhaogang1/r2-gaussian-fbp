@@ -69,6 +69,25 @@ class OptimizationParams(ParamGroup):
         self.max_screen_size = None
         self.max_scale = None  # percent of volume size
         self.max_num_gaussians = 500_000
+
+        # Optional pose-calibration branch.  All switches are disabled by
+        # default so the historical training path remains unchanged.
+        self.pose_enabled = False
+        self.pose_mode = "auto"
+        self.parallel_optimize_angle = False
+        self.parallel_optimize_global_detector_shift = False
+        self.parallel_optimize_per_view_detector_shift = False
+        self.parallel_optimize_beam_tilt = False
+        self.parallel_optimize_detector_roll = False
+        self.parallel_angle_max_deg = 0.5
+        self.parallel_detector_shift_max_pixel = 3.0
+        self.parallel_beam_tilt_max_deg = 0.5
+        self.parallel_detector_roll_max_deg = 0.5
+        self.pose_lr = 0.0001
+        self.pose_lambda_smooth = 0.1
+        self.cone_optimize_translation = True
+        self.cone_optimize_quaternion = True
+        self.pose_lambda_magnitude = 0.0
         super().__init__(parser, "Optimization Parameters")
 
 

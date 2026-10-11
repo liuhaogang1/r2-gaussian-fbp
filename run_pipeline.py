@@ -11,6 +11,7 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+import yaml
 
 
 ROOT = Path(__file__).resolve().parent
@@ -27,6 +28,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", type=Path, required=True)
     parser.add_argument("--model_path", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=None)
+    parser.add_argument(
+        "--train_config",
+        type=Path,
+        default=None,
+        help="Optional train.py config, e.g. configs/pose_parallel.yaml.",
+    )
+    parser.add_argument(
+        "--pose_result",
+        type=Path,
+        default=None,
+        help="Optional pose_offsets.npz to apply during the test stage.",
+    )
     center_source = parser.add_mutually_exclusive_group()
     center_source.add_argument("--center_json", type=Path, default=None)
     center_source.add_argument(
@@ -219,14 +232,17 @@ def main(args: argparse.Namespace) -> None:
     command(init_command)
 
     if not args.skip_train:
-        command([
+        train_command = [
             sys.executable,
             str(ROOT / "train.py"),
             "-s", str(output_dir),
             "-m", str(model_path),
             "--ply_path", str(init_output),
             "--iterations", str(args.iterations),
-        ])
+        ]
+        if args.train_config is not None:
+            train_command += ["--config", str(args.train_config.resolve())]
+        command(train_command)
 
     if not args.skip_test:
         test_command = [
@@ -242,6 +258,24 @@ def main(args: argparse.Namespace) -> None:
             test_command.append("--skip_render_test")
         if args.skip_recon:
             test_command.append("--skip_recon")
+        pose_result = args.pose_result.resolve() if args.pose_result else None
+        # Automatically use a result produced by this run only when the
+        # selected training config explicitly enables pose calibration. This
+        # prevents stale files in an old model directory from changing the
+        # default (pose-disabled) evaluation path.
+        if pose_result is None and args.train_config is not None:
+            with open(args.train_config.resolve(), "r", encoding="utf-8") as handle:
+                train_cfg = yaml.safe_load(handle) or {}
+            if train_cfg.get("pose_enabled", False):
+                candidate = model_path / "pose_calibration" / "pose_offsets.npz"
+                if candidate.exists():
+                    pose_result = candidate
+        if args.pose_result is not None and (
+            pose_result is None or not pose_result.exists()
+        ):
+            raise FileNotFoundError(f"Pose result not found: {pose_result}")
+        if pose_result is not None and pose_result.exists():
+            test_command += ["--pose_result", str(pose_result)]
         command(test_command)
 
 
