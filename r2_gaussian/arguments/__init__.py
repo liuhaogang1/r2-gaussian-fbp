@@ -70,6 +70,20 @@ class OptimizationParams(ParamGroup):
         self.max_scale = None  # percent of volume size
         self.max_num_gaussians = 500_000
 
+        # Optional sparse initialization-volume slice supervision.
+        self.slice_loss_enabled = False
+        self.slice_reference_path = ""
+        self.slice_axis = "z"
+        self.slice_start_iter = 500
+        self.slice_end_iter = 15000
+        self.slice_interval = 50
+        self.slice_filter_threshold = 0.01
+        self.slice_filter_ratio = 10.0
+        self.slice_max_points = 200_000
+        self.slice_query_chunk_size = 4096
+        self.lambda_slice = 0.05
+        self.slice_seed = 0
+
         # Optional pose-calibration branch.  All switches are disabled by
         # default so the historical training path remains unchanged.
         self.pose_enabled = False

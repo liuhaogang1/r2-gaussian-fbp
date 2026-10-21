@@ -122,6 +122,71 @@ def query(
     }
 
 
+def query_points(
+    pc: GaussianModel,
+    points_world: torch.Tensor,
+    pipe: PipelineParams,
+    chunk_size: int = 1024,
+    gaussian_chunk_size: int = 8192,
+):
+    """Differentiably evaluate the Gaussian density at sparse world points.
+
+    This is the sparse counterpart of :func:`query`.  It intentionally uses
+    the same unnormalised Gaussian sum as the CUDA voxelizer, while avoiding
+    allocation of a dense query volume.  The points are split into chunks to
+    keep the ``points x gaussians`` temporary bounded.
+    """
+    if points_world.ndim != 2 or points_world.shape[-1] != 3:
+        raise ValueError("points_world must have shape [M, 3]")
+    if points_world.numel() == 0:
+        return points_world.new_empty((0,))
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be positive")
+    if gaussian_chunk_size < 1:
+        raise ValueError("gaussian_chunk_size must be positive")
+
+    points_world = points_world.to(device=pc.get_xyz.device, dtype=pc.get_xyz.dtype)
+    means = pc.get_xyz
+    density = pc.get_density.reshape(-1)
+    # get_covariance returns [xx, xy, xz, yy, yz, zz], matching the CUDA
+    # voxelizer's symmetric covariance layout. Add a tiny diagonal floor to
+    # avoid rare singular matrices after densification.
+    cov6 = pc.get_covariance(1.0)
+    cov = torch.zeros((cov6.shape[0], 3, 3), device=means.device, dtype=means.dtype)
+    cov[:, 0, 0] = cov6[:, 0]
+    cov[:, 0, 1] = cov[:, 1]
+    cov[:, 1, 0] = cov6[:, 1]
+    cov[:, 0, 2] = cov6[:, 2]
+    cov[:, 2, 0] = cov6[:, 2]
+    cov[:, 1, 1] = cov6[:, 3]
+    cov[:, 1, 2] = cov6[:, 4]
+    cov[:, 2, 1] = cov6[:, 4]
+    cov[:, 2, 2] = cov6[:, 5]
+    cov = cov + torch.eye(3, device=means.device, dtype=means.dtype)[None] * 1e-10
+    precision = torch.linalg.inv(cov)
+
+    outputs = []
+    # The Gaussian count is intentionally kept in one dimension here. This
+    # preserves gradients to xyz, density, scale and rotation parameters.
+    for start in range(0, points_world.shape[0], chunk_size):
+        points = points_world[start : start + chunk_size]
+        values = points.new_zeros((points.shape[0],))
+        for g_start in range(0, means.shape[0], gaussian_chunk_size):
+            g_end = g_start + gaussian_chunk_size
+            delta = points[:, None, :] - means[None, g_start:g_end, :]
+            mahal = torch.einsum(
+                "mni,nij,mnj->mn",
+                delta,
+                precision[g_start:g_end],
+                delta,
+            )
+            values = values + torch.exp(-0.5 * mahal).matmul(
+                density[g_start:g_end]
+            )
+        outputs.append(values)
+    return torch.cat(outputs, dim=0)
+
+
 def render(
     viewpoint_camera: Camera,
     pc: GaussianModel,

@@ -180,6 +180,18 @@ DEFAULTS: dict[str, Any] = {
     "train_max_screen_size": None,
     "train_max_scale": None,
     "train_max_num_gaussians": 500000,
+    "train_slice_loss_enabled": False,
+    "train_slice_reference_path": None,
+    "train_slice_axis": "z",
+    "train_slice_start_iter": 500,
+    "train_slice_end_iter": 15000,
+    "train_slice_interval": 50,
+    "train_slice_filter_threshold": 0.01,
+    "train_slice_filter_ratio": 10.0,
+    "train_slice_max_points": 200000,
+    "train_slice_query_chunk_size": 1024,
+    "train_lambda_slice": 0.05,
+    "train_slice_seed": 0,
     "train_pose_enabled": False,
     "train_pose_mode": "auto",
     "train_parallel_optimize_angle": False,
@@ -226,6 +238,7 @@ PATH_KEYS = {
     "center_angles_npy", "center_endpoint_pair_npy", "fbp_sparse_fbp_output",
     "init_volume", "init_fbp_output", "init_output", "init_visualize_output",
     "init_visualize_slice_output", "init_fbp_nii_output", "train_source_path",
+    "train_slice_reference_path",
     "train_model_path", "train_ply_path", "train_start_checkpoint",
     "test_source_path", "test_model_path", "test_ply_path", "test_pose_result",
 }
@@ -410,7 +423,13 @@ def build_parser() -> argparse.ArgumentParser:
         ("tv_vol_size", int), ("density_min_threshold", float), ("densification_interval", int),
         ("densify_from_iter", int), ("densify_until_iter", int), ("densify_grad_threshold", float),
         ("densify_scale_threshold", float), ("max_screen_size", float), ("max_scale", float),
-        ("max_num_gaussians", int), ("pose_enabled", bool), ("pose_mode", str),
+        ("max_num_gaussians", int), ("slice_loss_enabled", bool),
+        ("slice_reference_path", Path), ("slice_axis", str),
+        ("slice_start_iter", int), ("slice_end_iter", int),
+        ("slice_interval", int), ("slice_filter_threshold", float),
+        ("slice_filter_ratio", float), ("slice_max_points", int),
+        ("slice_query_chunk_size", int), ("lambda_slice", float),
+        ("slice_seed", int), ("pose_enabled", bool), ("pose_mode", str),
         ("parallel_optimize_angle", bool), ("parallel_optimize_global_detector_shift", bool),
         ("parallel_optimize_per_view_detector_shift", bool), ("parallel_optimize_beam_tilt", bool),
         ("parallel_optimize_detector_roll", bool), ("parallel_angle_max_deg", float),
@@ -557,6 +576,16 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
         output = Path(values["output_dir"])
         values["center_output"] = output.with_name(output.name + "_center.json")
     values["init_seed"] = values["seed"] if values["init_seed"] is None else values["init_seed"]
+    if values.get("train_slice_loss_enabled") and values.get("train_slice_reference_path") is None:
+        if values.get("init_source") == "custom":
+            values["train_slice_reference_path"] = values.get("init_volume")
+        elif values.get("init_source") == "train_fbp":
+            output = Path(values["output_dir"])
+            values["train_slice_reference_path"] = (
+                values.get("init_fbp_output") or output / "vol_train_fbp.npy"
+            )
+        else:
+            values["train_slice_reference_path"] = Path(values["output_dir"]) / "vol_fbp.npy"
     return argparse.Namespace(**values)
 
 
@@ -707,6 +736,10 @@ def write_train_config(args: argparse.Namespace, path: Path, source: Path, model
         "lambda_dssim", "lambda_tv", "tv_vol_size", "density_min_threshold",
         "densification_interval", "densify_from_iter", "densify_until_iter", "densify_grad_threshold",
         "densify_scale_threshold", "max_screen_size", "max_scale", "max_num_gaussians",
+        "slice_loss_enabled", "slice_reference_path", "slice_axis",
+        "slice_start_iter", "slice_end_iter", "slice_interval",
+        "slice_filter_threshold", "slice_filter_ratio", "slice_max_points",
+        "slice_query_chunk_size", "lambda_slice", "slice_seed",
         "pose_enabled", "pose_mode", "parallel_optimize_angle", "parallel_optimize_global_detector_shift",
         "parallel_optimize_per_view_detector_shift", "parallel_optimize_beam_tilt",
         "parallel_optimize_detector_roll", "parallel_angle_max_deg", "parallel_detector_shift_max_pixel",
@@ -752,13 +785,16 @@ def build_train_command(args: argparse.Namespace, init_output: Path, train_confi
         "rotation_lr_final", "rotation_lr_max_steps", "lambda_dssim", "lambda_tv", "tv_vol_size",
         "density_min_threshold", "densification_interval", "densify_from_iter", "densify_until_iter",
         "densify_grad_threshold", "densify_scale_threshold", "max_screen_size", "max_scale",
-        "max_num_gaussians", "pose_mode", "parallel_angle_max_deg", "parallel_detector_shift_max_pixel",
+        "max_num_gaussians", "slice_reference_path", "slice_axis", "slice_start_iter",
+        "slice_end_iter", "slice_interval", "slice_filter_threshold",
+        "slice_filter_ratio", "slice_max_points", "slice_query_chunk_size",
+        "lambda_slice", "slice_seed", "pose_mode", "parallel_angle_max_deg", "parallel_detector_shift_max_pixel",
         "parallel_beam_tilt_max_deg", "parallel_detector_roll_max_deg", "pose_lr", "pose_lambda_smooth",
         "pose_lambda_magnitude",
     )
     for name in scalar_names:
         add_option(command, "--" + name, getattr(args, "train_" + name))
-    for name in ("compute_cov3D_python", "debug", "pose_enabled", "parallel_optimize_angle",
+    for name in ("compute_cov3D_python", "debug", "slice_loss_enabled", "pose_enabled", "parallel_optimize_angle",
                  "parallel_optimize_global_detector_shift", "parallel_optimize_per_view_detector_shift",
                  "parallel_optimize_beam_tilt", "parallel_optimize_detector_roll",
                  "cone_optimize_translation", "cone_optimize_quaternion", "detect_anomaly", "quiet"):
@@ -821,6 +857,23 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("train_pose_mode must be auto, parallel, or cone")
     if args.train_pose_enabled and args.train_pose_mode != "auto" and args.train_pose_mode != args.fbp_mode:
         raise ValueError("train_pose_mode must match fbp_mode when pose calibration is enabled")
+    if args.train_slice_loss_enabled:
+        if args.train_pose_enabled:
+            raise ValueError("train_slice_loss_enabled cannot be combined with train_pose_enabled")
+        if args.train_slice_axis not in {"x", "y", "z"}:
+            raise ValueError("train_slice_axis must be x, y, or z")
+        if args.train_slice_interval < 1 or args.train_slice_max_points < 1:
+            raise ValueError("slice interval and max points must be positive")
+        if args.train_slice_end_iter < args.train_slice_start_iter:
+            raise ValueError("train_slice_end_iter must be >= train_slice_start_iter")
+        if args.train_slice_query_chunk_size < 1:
+            raise ValueError("train_slice_query_chunk_size must be positive")
+        if not (0.0 < args.train_slice_filter_ratio <= 100.0):
+            raise ValueError("train_slice_filter_ratio must be in (0, 100]")
+        if args.train_lambda_slice < 0:
+            raise ValueError("train_lambda_slice must be non-negative")
+        if args.train_slice_reference_path is None:
+            raise ValueError("slice reference path is required when slice loss is enabled")
 
 
 def stage_in_window(args: argparse.Namespace, stage: str) -> bool:

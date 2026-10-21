@@ -22,7 +22,7 @@ import yaml
 
 sys.path.append("./")
 from r2_gaussian.arguments import ModelParams, OptimizationParams, PipelineParams
-from r2_gaussian.gaussian import GaussianModel, render, query, initialize_gaussian
+from r2_gaussian.gaussian import GaussianModel, render, query, query_points, initialize_gaussian
 from r2_gaussian.utils.general_utils import safe_state
 from r2_gaussian.utils.cfg_utils import load_config
 from r2_gaussian.utils.log_utils import prepare_output_and_logger
@@ -31,6 +31,108 @@ from r2_gaussian.utils.loss_utils import l1_loss, ssim, tv_3d_loss
 from r2_gaussian.utils.image_utils import metric_vol, metric_proj
 from r2_gaussian.utils.plot_utils import show_two_slice
 from r2_gaussian.pose import ParallelPose, ConePose
+
+
+def _prepare_slice_supervision(opt, scanner_cfg, device):
+    """Load and validate the fixed reference volume for sparse slice loss."""
+    if not getattr(opt, "slice_loss_enabled", False):
+        return None
+    if getattr(opt, "pose_enabled", False):
+        raise ValueError("slice_loss_enabled is not supported with pose_enabled")
+    reference_path = getattr(opt, "slice_reference_path", "")
+    if not reference_path:
+        raise ValueError("slice_reference_path is required when slice_loss_enabled=true")
+    if not osp.exists(reference_path):
+        raise FileNotFoundError(f"Slice reference volume not found: {reference_path}")
+    reference = np.asarray(np.load(reference_path, mmap_mode="r"), dtype=np.float32)
+    expected_shape = tuple(int(value) for value in scanner_cfg["nVoxel"])
+    if reference.ndim != 3 or tuple(reference.shape) != expected_shape:
+        raise ValueError(
+            f"Slice reference shape {reference.shape} does not match scanner nVoxel {expected_shape}"
+        )
+    if not np.isfinite(reference).all():
+        raise ValueError("Slice reference volume contains non-finite values")
+    axis = str(getattr(opt, "slice_axis", "z")).lower()
+    if axis not in {"x", "y", "z"}:
+        raise ValueError("slice_axis must be one of x, y, z")
+    interval = int(getattr(opt, "slice_interval", 50))
+    if interval < 1:
+        raise ValueError("slice_interval must be at least 1")
+    if int(getattr(opt, "slice_end_iter", 15000)) < int(
+        getattr(opt, "slice_start_iter", 500)
+    ):
+        raise ValueError("slice_end_iter must be greater than or equal to slice_start_iter")
+    ratio = float(getattr(opt, "slice_filter_ratio", 10.0))
+    if not (0.0 < ratio <= 100.0):
+        raise ValueError("slice_filter_ratio must be in (0, 100]")
+    max_points = int(getattr(opt, "slice_max_points", 200_000))
+    if max_points < 1:
+        raise ValueError("slice_max_points must be positive")
+    threshold = getattr(opt, "slice_filter_threshold", 0.01)
+    if threshold is not None and not np.isfinite(float(threshold)):
+        raise ValueError("slice_filter_threshold must be finite or null")
+    if float(getattr(opt, "lambda_slice", 0.05)) < 0:
+        raise ValueError("lambda_slice must be non-negative")
+    if int(getattr(opt, "slice_query_chunk_size", 1024)) < 1:
+        raise ValueError("slice_query_chunk_size must be positive")
+    return {
+        "volume": reference,
+        "axis": axis,
+        "axis_index": {"x": 0, "y": 1, "z": 2}[axis],
+        "generator": torch.Generator().manual_seed(
+            int(getattr(opt, "slice_seed", 0))
+        ),
+        "threshold": None if threshold is None else float(threshold),
+        "ratio": ratio,
+        "max_points": max_points,
+        "device": device,
+    }
+
+
+def _sample_sparse_slice(supervision, iteration, opt, scanner_cfg):
+    """Return sparse world points and reference values, or None if skipped."""
+    start = int(getattr(opt, "slice_start_iter", 500))
+    end = int(getattr(opt, "slice_end_iter", 15000))
+    interval = int(getattr(opt, "slice_interval", 50))
+    if iteration < start or iteration > end or (iteration - start) % interval:
+        return None
+    volume = supervision["volume"]
+    axis = supervision["axis_index"]
+    n_voxel = np.asarray(scanner_cfg["nVoxel"], dtype=np.int64)
+    n_slices = int(n_voxel[axis])
+    slice_index = int(torch.randint(n_slices, (1,), generator=supervision["generator"]).item())
+    reference_slice = np.take(volume, slice_index, axis=axis)
+    threshold = supervision["threshold"]
+    if threshold is None:
+        candidate = np.arange(reference_slice.size, dtype=np.int64)
+    else:
+        candidate = np.flatnonzero(reference_slice.reshape(-1) > threshold)
+    if candidate.size == 0:
+        return {"skipped": True, "axis": axis, "slice_index": slice_index, "candidates": 0}
+    count = max(1, int(np.ceil(candidate.size * supervision["ratio"] / 100.0)))
+    count = min(count, supervision["max_points"], candidate.size)
+    order = torch.randperm(candidate.size, generator=supervision["generator"])[:count].numpy()
+    chosen = candidate[order]
+    ref_values = reference_slice.reshape(-1)[chosen].astype(np.float32, copy=False)
+    plane_shape = [int(n_voxel[i]) for i in range(3) if i != axis]
+    plane_indices = np.column_stack(np.unravel_index(chosen, tuple(plane_shape)))
+    indices = np.zeros((count, 3), dtype=np.float32)
+    other_axes = [i for i in range(3) if i != axis]
+    indices[:, axis] = slice_index
+    for col, coord_axis in enumerate(other_axes):
+        indices[:, coord_axis] = plane_indices[:, col]
+    s_voxel = np.asarray(scanner_cfg["sVoxel"], dtype=np.float32)
+    off_origin = np.asarray(scanner_cfg["offOrigin"], dtype=np.float32)
+    d_voxel = s_voxel / n_voxel.astype(np.float32)
+    points_world = off_origin - s_voxel / 2.0 + (indices + 0.5) * d_voxel
+    return {
+        "points_world": torch.from_numpy(points_world).to(supervision["device"]),
+        "reference": torch.from_numpy(ref_values).to(supervision["device"]),
+        "axis": axis,
+        "slice_index": slice_index,
+        "candidates": int(candidate.size),
+        "count": count,
+    }
 
 
 def save_pose_result(scene, pose_model):
@@ -195,6 +297,10 @@ def training(
         gaussians.restore(model_params, opt)
         print(f"Load checkpoint {osp.basename(checkpoint)}.")
 
+    slice_supervision = _prepare_slice_supervision(
+        opt, scanner_cfg, gaussians.get_xyz.device
+    )
+
     # Set up loss
     use_tv = opt.lambda_tv > 0
     if use_tv:
@@ -258,6 +364,40 @@ def training(
             loss_tv = tv_3d_loss(vol_pred, reduction="mean")
             loss["tv"] = loss_tv
             loss["total"] = loss["total"] + opt.lambda_tv * loss_tv
+
+        # Optional sparse initialization-volume slice supervision. Only the
+        # sampled reference positions are queried, so no dense slice volume is
+        # allocated and the branch remains inactive by default.
+        if slice_supervision is not None:
+            sampled_slice = _sample_sparse_slice(
+                slice_supervision, iteration, opt, scanner_cfg
+            )
+            if sampled_slice is not None:
+                if sampled_slice.get("skipped", False):
+                    tqdm.write(
+                        f"[ITER {iteration}] Slice loss skipped: no reference values above threshold"
+                    )
+                else:
+                    prediction = query_points(
+                        gaussians,
+                        sampled_slice["points_world"],
+                        pipe,
+                        chunk_size=getattr(opt, "slice_query_chunk_size", 1024),
+                    )
+                    loss_slice = torch.abs(
+                        prediction - sampled_slice["reference"]
+                    ).mean()
+                    loss["slice"] = loss_slice
+                    loss["total"] = (
+                        loss["total"]
+                        + getattr(opt, "lambda_slice", 0.05) * loss_slice
+                    )
+                    tqdm.write(
+                        f"[ITER {iteration}] Sparse slice axis={sampled_slice['axis']} "
+                        f"index={sampled_slice['slice_index']} "
+                        f"candidates={sampled_slice['candidates']} "
+                        f"samples={sampled_slice['count']}"
+                    )
 
         if pose_model is not None:
             loss_pose = pose_model.regularization()

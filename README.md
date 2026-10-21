@@ -19,6 +19,7 @@ scripts/scan_fbp_center.py         0/180 端点中心扫描
 init_from_fbp.py                   FBP -> Gaussian 初始化与可视化
 train.py                           训练
 test.py                            测试、投影评估和体重建
+export_highres.py                 可选：训练完成后分块导出高分辨率 Gaussian 体
 run_pipeline.py                    单命令串联上述四个阶段
 r2_gaussian/                       R2-Gaussian 核心实现
 ```
@@ -98,5 +99,18 @@ python init_from_fbp.py --help
 python train.py --help
 python test.py --help
 ```
+
+训练和常规测试完成后，可选地对训练好的 Gaussian 连续场进行高分辨率采样。该脚本独立运行，不会被 run_pipeline.py 自动调用，也不会修改原有训练或测试结果：
+
+```bash
+python export_highres.py \
+  -s /path/to/dataset \
+  -m /path/to/model \
+  --iteration -1 \
+  --resolution 1024 1024 1024 \
+  --chunk_size 128 128 64
+```
+
+默认结果写入 <model>/highres/，以磁盘映射方式逐块写入 .npy，并生成同名 JSON 元数据。默认块大小为 128 128 64、输出类型为 float32；可通过 --dtype float16 减小文件体积。若输出文件已存在，脚本会停止而不会覆盖。输出是对训练 Gaussian 场的直接密集采样，并非额外训练或超分辨率推断。
 
 本目录不包含原始 TIFF、训练输出或 Git 元数据；数据和模型应放在代码目录之外。
