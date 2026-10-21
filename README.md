@@ -111,6 +111,17 @@ python export_highres.py \
   --chunk_size 128 128 64
 ```
 
-默认结果写入 <model>/highres/，以磁盘映射方式逐块写入 .npy，并生成同名 JSON 元数据。默认块大小为 128 128 64、输出类型为 float32；可通过 --dtype float16 减小文件体积。若输出文件已存在，脚本会停止而不会覆盖。输出是对训练 Gaussian 场的直接密集采样，并非额外训练或超分辨率推断。
+默认结果写入 `<model>/highres/`，以磁盘映射方式逐块写入 `.npy`。每次运行自动生成以下全部文件，不需要额外参数：
+
+- `vol_pred_iter_<迭代>_<NX>x<NY>x<NZ>.npy`：完整体数据，数组顺序为 `[X, Y, Z]`。
+- 同名 `.json`：模型、网格、坐标、切片显示范围和输出文件信息。
+- 同名 `_center_slices.png`：X/Y/Z 三个方向中心切片的拼图，使用统一灰度窗口，并保持物理长宽比。PNG 的显示窗不会改变体数据。
+- 同名 `.nii.gz`：可直接拖入 3D Slicer 的完整体数据，固定为 float32，按 Z 切片压缩写出，不额外复制完整体到内存。
+
+默认块大小为 `128 128 64`、NPY 输出类型为 float32；可通过 `--dtype float16` 减小 NPY 体积，但 NIfTI 仍为 float32，以便 Slicer 兼容。使用 `--output` 时，其他三个文件沿用指定文件的目录和主文件名。任一目标文件已存在时，脚本会在查询前停止，不覆盖已有结果。
+
+NIfTI 的 spacing 和原点恢复为数据集 `meta_data.json` 中的原始长度坐标，原点对应第一个 voxel 的中心；XYZ 轴使用单位方向的 LPS 约定并转换为 NIfTI 的 RAS sform，不交换 X/Y。JSON 原有的 `spacing_xyz/center_xyz/size_xyz` 仍是模型归一化坐标，新增的 `nifti_geometry` 描述 NIfTI 原始数据集坐标。由于数据集未声明长度单位，NIfTI 不擅自标记为毫米；如果原始参数并非毫米，Slicer 中的测量数值需要结合实际单位解读。
+
+输出是对训练 Gaussian 场的直接密集采样，并非额外训练或超分辨率推断。NIfTI 强度值与 NPY 一致，不随空间坐标恢复而缩放。float32 的 1024³ NPY 约占 4 GiB，NIfTI 还需要额外磁盘空间和压缩时间；其压缩大小取决于数据。原有训练、测试和管线入口保持不变。
 
 本目录不包含原始 TIFF、训练输出或 Git 元数据；数据和模型应放在代码目录之外。

@@ -17,6 +17,7 @@ from tqdm import tqdm
 from r2_gaussian.arguments import ModelParams, PipelineParams
 from r2_gaussian.gaussian import GaussianModel, initialize_gaussian, query
 from r2_gaussian.utils.general_utils import safe_state, t2a
+from r2_gaussian.utils.volume_export_utils import save_center_slices, save_nifti_streaming
 
 
 _SCANNER_SPATIAL_KEYS = (
@@ -168,6 +169,16 @@ def main():
         "highres",
         f"vol_pred_iter_{loaded_iter}_{resolution[0]}x{resolution[1]}x{resolution[2]}.npy",
     )
+    output_path = osp.abspath(output_path)
+    output_stem = osp.splitext(output_path)[0]
+    metadata_path = output_stem + ".json"
+    slices_path = output_stem + "_center_slices.png"
+    nifti_path = output_stem + ".nii.gz"
+    # Fail before an expensive query if any of the automatically generated
+    # companion files would overwrite a previous result.
+    for path in (output_path, metadata_path, slices_path, nifti_path):
+        if osp.exists(path):
+            raise FileExistsError(f"Output already exists: {path}. Choose another --output path.")
     spacing = export_volume(
         gaussians,
         pipeline_params,
@@ -178,14 +189,41 @@ def main():
         output_path,
         args.dtype,
     )
+    # Query coordinates are normalized model coordinates. Restore the original
+    # dataset geometry for Slicer; density values are deliberately unchanged.
+    dataset_spacing = spacing / scene_scale
+    dataset_center = np.asarray(center, dtype=np.float64) / scene_scale
+    dataset_size = np.asarray(full_size, dtype=np.float64) / scene_scale
+    dataset_origin = dataset_center - dataset_size / 2 + dataset_spacing / 2
+    volume = np.load(output_path, mmap_mode="r")
+    try:
+        print("Saving X/Y/Z center slices...")
+        preview_info = save_center_slices(volume, dataset_spacing, slices_path)
+        print("Writing compressed NIfTI one Z plane at a time...")
+        save_nifti_streaming(volume, dataset_spacing, dataset_origin, nifti_path)
+    finally:
+        del volume
     metadata = {
         "volume": osp.basename(output_path),
+        "center_slices": osp.basename(slices_path),
+        "nifti": osp.basename(nifti_path),
+        "preview": preview_info,
         "shape_xyz": list(resolution),
         "dtype": args.dtype,
         "spacing_xyz": spacing.tolist(),
         "center_xyz": [float(value) for value in center],
         "size_xyz": [float(value) for value in full_size],
         "scene_scale": float(scene_scale),
+        "nifti_geometry": {
+            "spacing_xyz": dataset_spacing.tolist(),
+            "origin_xyz": dataset_origin.tolist(),
+            "center_xyz": dataset_center.tolist(),
+            "size_xyz": dataset_size.tolist(),
+            "coordinate_system": "LPS (identity direction); stored as RAS sform",
+            "length_unit": "original dataset units (unspecified in NIfTI header)",
+            "dtype": "float32",
+            "intensity": "unchanged Gaussian density, matching the NPY",
+        },
         "model_path": osp.abspath(dataset.model_path),
         "source_path": osp.abspath(dataset.source_path),
         "iteration": int(loaded_iter),
@@ -193,10 +231,11 @@ def main():
         "pose_enabled": bool(args.pose_enabled),
         "note": "Direct samples of the trained Gaussian field; not a new reconstruction or super-resolution inference.",
     }
-    metadata_path = osp.splitext(output_path)[0] + ".json"
-    with open(metadata_path, "w", encoding="utf-8") as handle:
+    with open(metadata_path, "x", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2, ensure_ascii=False)
     print(f"Saved high-resolution volume: {output_path}")
+    print(f"Saved center slices: {slices_path}")
+    print(f"Saved Slicer volume: {nifti_path}")
     print(f"Saved volume metadata: {metadata_path}")
 
 
