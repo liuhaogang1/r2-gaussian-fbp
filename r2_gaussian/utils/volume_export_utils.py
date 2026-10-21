@@ -54,7 +54,13 @@ def save_center_slices(volume, spacing, output_path):
 
 
 def save_nifti_streaming(volume, spacing, origin, output_path):
-    """Write NIfTI-1 float32 in Z planes (XYZ input, X-fastest file order).
+    """Write float32 NIfTI with the original pipeline's XY display convention.
+
+    Equivalent to SimpleITK.GetImageFromArray(volume.transpose(2, 0, 1)),
+    followed by SetSpacing(spacing) and SetOrigin(origin). Thus NIfTI I/J/K
+    correspond to input Y/X/Z, and its size is (NY, NX, NZ). Deliberately keep
+    spacing/origin in the supplied order, as in the original pipeline; do not
+    apply an extra direction transform or swap the NPY/query coordinates.
 
     spacing/origin use the original dataset length units, with identity LPS
     direction, like SimpleITK. NIfTI sform stores the equivalent RAS transform.
@@ -69,12 +75,13 @@ def save_nifti_streaming(volume, spacing, origin, output_path):
         raise ValueError("spacing must contain three positive finite values")
     if origin.shape != (3,) or not np.all(np.isfinite(origin)):
         raise ValueError("origin must contain three finite values")
+    nifti_shape = (volume.shape[1], volume.shape[0], volume.shape[2])
 
     # NIfTI-1 single-file header plus its four-byte extension flag. Using a
     # streaming gzip writer avoids a full transposed array and a SimpleITK copy.
     header = bytearray(352)
     struct.pack_into("<i", header, 0, 348)
-    struct.pack_into("<8h", header, 40, 3, *volume.shape, 1, 1, 1, 1)
+    struct.pack_into("<8h", header, 40, 3, *nifti_shape, 1, 1, 1, 1)
     struct.pack_into("<2h", header, 70, 16, 32)  # DT_FLOAT32, bitpix
     struct.pack_into("<8f", header, 76, 1.0, *spacing, 1.0, 1.0, 1.0, 1.0)
     struct.pack_into("<3f", header, 108, 352.0, 1.0, 0.0)  # offset, slope, intercept
@@ -92,7 +99,9 @@ def save_nifti_streaming(volume, spacing, origin, output_path):
         with raw, gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=6, mtime=0) as stream:
             stream.write(header)
             for index in range(volume.shape[2]):
-                plane = np.asarray(volume[:, :, index].T, dtype="<f4", order="C")
+                # File I is fastest: write [input X, input Y] without a
+                # transpose, matching each [J, I] plane of the legacy writer.
+                plane = np.asarray(volume[:, :, index], dtype="<f4", order="C")
                 stream.write(plane.tobytes(order="C"))
     except BaseException:
         raw.close()

@@ -120,7 +120,11 @@ python export_highres.py \
 
 默认块大小为 `128 128 64`、NPY 输出类型为 float32；可通过 `--dtype float16` 减小 NPY 体积，但 NIfTI 仍为 float32，以便 Slicer 兼容。使用 `--output` 时，其他三个文件沿用指定文件的目录和主文件名。任一目标文件已存在时，脚本会在查询前停止，不覆盖已有结果。
 
-NIfTI 的 spacing 和原点恢复为数据集 `meta_data.json` 中的原始长度坐标，原点对应第一个 voxel 的中心；XYZ 轴使用单位方向的 LPS 约定并转换为 NIfTI 的 RAS sform，不交换 X/Y。JSON 原有的 `spacing_xyz/center_xyz/size_xyz` 仍是模型归一化坐标，新增的 `nifti_geometry` 描述 NIfTI 原始数据集坐标。由于数据集未声明长度单位，NIfTI 不擅自标记为毫米；如果原始参数并非毫米，Slicer 中的测量数值需要结合实际单位解读。
+NIfTI 的轴顺序与原流程 `test.py` 保持一致：等价于 `sitk.GetImageFromArray(volume.transpose(2, 0, 1))`，因此 NIfTI I/J/K 对应 NPY 的 Y/X/Z，文件尺寸为 `(NY, NX, NZ)`。仅 NIfTI 写出时交换 X/Y，不对数据做 180° 旋转；分块查询、NPY 和中心切片 PNG 仍保持原来的 XYZ 约定。
+
+本次轴顺序兼容不改变现有 spacing、原点或尺度：NIfTI 仍使用数据集 `meta_data.json` 的原始长度坐标，原点对应第一个 voxel 的中心，采用单位方向 LPS 并转换为 NIfTI 的 RAS sform。spacing 和原点按原有顺序设置，不随体素轴交换。JSON 原有的 `spacing_xyz/center_xyz/size_xyz` 仍是模型归一化坐标，`nifti_geometry` 记录 NIfTI 实际尺寸、轴映射及空间几何。原流程测试体采用归一化尺度且原点为零，故方向兼容不代表两份文件可以直接空间叠加。由于数据集未声明长度单位，NIfTI 不擅自标记为毫米；如果原始参数并非毫米，Slicer 中的测量数值需要结合实际单位解读。
+
+此修改只影响此后新导出的 NIfTI，不会自动改写之前生成的文件。
 
 输出是对训练 Gaussian 场的直接密集采样，并非额外训练或超分辨率推断。NIfTI 强度值与 NPY 一致，不随空间坐标恢复而缩放。float32 的 1024³ NPY 约占 4 GiB，NIfTI 还需要额外磁盘空间和压缩时间；其压缩大小取决于数据。原有训练、测试和管线入口保持不变。
 

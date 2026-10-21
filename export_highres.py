@@ -195,6 +195,11 @@ def main():
     dataset_center = np.asarray(center, dtype=np.float64) / scene_scale
     dataset_size = np.asarray(full_size, dtype=np.float64) / scene_scale
     dataset_origin = dataset_center - dataset_size / 2 + dataset_spacing / 2
+    # Match test.py's NIfTI-only XY permutation. Query, NPY and center-slice
+    # PNG retain their original XYZ convention; spacing/origin are unchanged.
+    nifti_shape = np.asarray(resolution, dtype=np.int64)[[1, 0, 2]]
+    nifti_size = nifti_shape * dataset_spacing
+    nifti_center = dataset_origin + (nifti_shape - 1) * dataset_spacing / 2
     volume = np.load(output_path, mmap_mode="r")
     try:
         print("Saving X/Y/Z center slices...")
@@ -215,10 +220,13 @@ def main():
         "size_xyz": [float(value) for value in full_size],
         "scene_scale": float(scene_scale),
         "nifti_geometry": {
+            "shape_xyz": nifti_shape.tolist(),
+            "input_axes_for_nifti_ijk": ["Y", "X", "Z"],
+            "axis_convention": "legacy test.py: GetImageFromArray(volume.transpose(2, 0, 1))",
             "spacing_xyz": dataset_spacing.tolist(),
             "origin_xyz": dataset_origin.tolist(),
-            "center_xyz": dataset_center.tolist(),
-            "size_xyz": dataset_size.tolist(),
+            "center_xyz": nifti_center.tolist(),
+            "size_xyz": nifti_size.tolist(),
             "coordinate_system": "LPS (identity direction); stored as RAS sform",
             "length_unit": "original dataset units (unspecified in NIfTI header)",
             "dtype": "float32",
