@@ -154,7 +154,7 @@ def query_points(
     cov6 = pc.get_covariance(1.0)
     cov = torch.zeros((cov6.shape[0], 3, 3), device=means.device, dtype=means.dtype)
     cov[:, 0, 0] = cov6[:, 0]
-    cov[:, 0, 1] = cov[:, 1]
+    cov[:, 0, 1] = cov6[:, 1]
     cov[:, 1, 0] = cov6[:, 1]
     cov[:, 0, 2] = cov6[:, 2]
     cov[:, 2, 0] = cov6[:, 2]
