@@ -11,7 +11,8 @@ from unittest import mock
 import numpy as np
 
 import init_from_fbp as init
-import prepare_fbp_tiff as prepare
+from fbp_test_support import import_prepare
+prepare = import_prepare()
 import run_pipeline as pipeline
 from scripts.fbp_geometry import initialization_positions, reconstruction_scanner
 
@@ -119,7 +120,7 @@ class GeometryTests(unittest.TestCase):
         fake_tigre = ModuleType("tigre")
         fake_tigre.geometry = lambda **kwargs: SimpleNamespace(**kwargs)
         projections = np.arange(3 * 12 * 20, dtype=np.float32).reshape(3, 12, 20)
-        with mock.patch.dict(sys.modules, {"tigre": fake_tigre}):
+        with mock.patch.object(prepare, "tigre", fake_tigre):
             with mock.patch.object(prepare, "reconstruct_volume", return_value=np.ones((4, 4, 4))) as reconstruct:
                 prepare.reconstruct_with_optional_subsample(args, projections, np.zeros(3), None)
         saved_input, _, _, geo = reconstruct.call_args.args
@@ -156,14 +157,17 @@ class GeometryTests(unittest.TestCase):
                     "--input_type", "line_integral", "--shift_v", "0", "--n_train", "2",
                     "--n_test", "1", "--nVoxel", "8", "8", "8",
                     "--sVoxel", "0.01344", "0.01344", "0.01344", "--pixel_size", "0.00004"])
-                with mock.patch.dict(sys.modules, {"tigre": fake_tigre}), mock.patch.object(
+                with mock.patch.object(prepare, "tigre", fake_tigre), mock.patch.object(
                     prepare, "reconstruct_volume", return_value=np.ones((8, 8, 8), dtype=np.float32)
                 ), mock.patch.object(prepare, "save_fbp_preview", return_value=(0, 1)) as preview:
                     prepare.main(args)
                 expected_size = [2, 2, 2] if mode == "gaussian" else [0.01344] * 3
                 np.testing.assert_allclose(preview.call_args.args[2], expected_size)
                 metadata.append(json.loads((root / mode / "meta_data.json").read_text()))
-                self.assertEqual(metadata[-1]["reconstruction"]["coordinate_mode"], mode)
+                if mode == "gaussian":
+                    self.assertEqual(metadata[-1]["reconstruction"]["coordinate_mode"], mode)
+                else:
+                    self.assertNotIn("reconstruction", metadata[-1])
             self.assertEqual(metadata[0]["scanner"], metadata[1]["scanner"])
             self.assertEqual(metadata[0]["proj_train"], metadata[1]["proj_train"])
             np.testing.assert_array_equal(np.load(root / "physical" / "proj_all.npy"),
@@ -180,7 +184,8 @@ class TrainFBPTests(unittest.TestCase):
         self.metadata = dict(scanner=scanner(), proj_train=[dict(file_path="view.npy", angle=0)],
                              reconstruction=dict(coordinate_mode="gaussian"))
         self.save_metadata()
-        self.args = argparse.Namespace(dataset=self.dataset, use_train_fbp=True, volume=None, fbp_output=None)
+        self.args = argparse.Namespace(dataset=self.dataset, use_train_fbp=True, volume=None,
+                                       fbp_output=None, coordinate_mode="gaussian")
 
     def save_metadata(self):
         (self.dataset / "meta_data.json").write_text(json.dumps(self.metadata))
@@ -190,7 +195,7 @@ class TrainFBPTests(unittest.TestCase):
         backend.get_geometry_tigre = mock.Mock(side_effect=lambda cfg: cfg)
         backend.recon_volume = mock.Mock(return_value=np.ones((24, 24, 24)))
         with mock.patch.dict(sys.modules, {"r2_gaussian.utils.ct_utils": backend}):
-            init.reconstruct_from_train_views(self.dataset)
+            init.reconstruct_from_train_views(self.dataset, "gaussian")
         geometry = backend.get_geometry_tigre.call_args.args[0]
         self.assertEqual(geometry["sDetector"], [0.01344, 0.01344])
         self.assertEqual(self.metadata["scanner"]["sDetector"], [0.02432, 0.02416])

@@ -11,9 +11,9 @@ from pathlib import Path
 
 import numpy as np
 import tifffile
-from scripts.fbp_geometry import (
-    SVoxelAction, auto_svoxel_from_projection, parse_svoxel, reconstruction_scanner,
-)
+import tigre
+import tigre.algorithms as algs
+from scripts.fbp_options import SVoxelAction
 from scripts.fbp_preprocess import (
     build_angles,
     load_flat_field,
@@ -61,13 +61,6 @@ def save_fbp_preview(
     return float(low), float(high)
 
 
-def preview_size(args):
-    size = np.asarray(args.sVoxel, dtype=np.float64)
-    if getattr(args, "coordinate_mode", "physical") == "gaussian":
-        size = size * (2.0 / float(size.max()))
-    return size
-
-
 def build_geometry(args, detector_shape):
     """Build the TIGRE geometry for parallel FBP or cone FDK.
 
@@ -76,8 +69,9 @@ def build_geometry(args, detector_shape):
     is the pixel size at the rotation axis, i.e. the detector pixel pitch
     divided by the geometric magnification ``DSD / DSO``.
     """
-    import tigre
-
+    if getattr(args, "coordinate_mode", None) == "gaussian":
+        from scripts.gaussian_fbp import build_geometry as build_gaussian_geometry
+        return build_gaussian_geometry(args, detector_shape, build_geometry)
     height, width = detector_shape
     effective_pixel_size = args.pixel_size * args.pixel_subsample
     mode = args.mode
@@ -91,11 +85,6 @@ def build_geometry(args, detector_shape):
         [height * effective_pixel_size, width * effective_pixel_size],
         dtype=np.float32,
     )
-    effective_scanner = reconstruction_scanner(
-        {"mode": mode, "sVoxel": args.sVoxel, "sDetector": geo.sDetector.tolist()},
-        getattr(args, "coordinate_mode", "physical"),
-    )
-    geo.sDetector = np.asarray(effective_scanner["sDetector"], dtype=np.float32)
     geo.dDetector = geo.sDetector / geo.nDetector
     geo.nVoxel = np.asarray(args.nVoxel[::-1], dtype=np.int32)
     geo.sVoxel = np.asarray(args.sVoxel[::-1], dtype=np.float32)
@@ -114,8 +103,6 @@ def build_geometry(args, detector_shape):
 
 def reconstruct_volume(projections, angles, args, geo):
     """FBP for parallel-beam geometry, FDK for cone-beam geometry."""
-    import tigre.algorithms as algs
-
     if args.mode == "cone":
         volume_tigre = algs.fdk(projections[:, ::-1, :], geo, angles)
     else:
@@ -148,6 +135,9 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images, f
     ``raw_images`` must already have the duplicate endpoint removed, i.e. it
     corresponds one-to-one with ``projections`` and ``angles``.
     """
+    if getattr(args, "coordinate_mode", None) == "gaussian":
+        from scripts.gaussian_fbp import reconstruct
+        return reconstruct(args, projections, angles, build_geometry, reconstruct_volume)
     recon_subsample = (
         args.pixel_subsample
         if args.recon_pixel_subsample is None
@@ -156,20 +146,6 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images, f
     if recon_subsample == args.pixel_subsample:
         geometry_args = args
         reconstruction_input = projections
-    elif getattr(args, "coordinate_mode", "physical") == "gaussian":
-        # Preserve the entire normalized detector field when reducing FBP
-        # cost. Raw preprocessing would crop a rectangular detector square.
-        from scipy.ndimage import zoom
-
-        geometry_args = argparse.Namespace(**vars(args))
-        geometry_args.pixel_subsample = recon_subsample
-        height, width = projections.shape[1:]
-        new_height = max(1, height * args.pixel_subsample // recon_subsample)
-        new_width = max(1, width * args.pixel_subsample // recon_subsample)
-        reconstruction_input = zoom(
-            projections, (1, new_height / height, new_width / width),
-            order=args.resize_order,
-        ).astype(np.float32)
     else:
         if raw_images is None:
             raise ValueError(
@@ -191,18 +167,15 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images, f
             flush=True,
         )
     geo = build_geometry(geometry_args, reconstruction_input.shape[1:])
-    print(
-        f"FBP coordinate mode: {getattr(args, 'coordinate_mode', 'physical')}; "
-        f"detector V/U size: {geo.sDetector.tolist()}; "
-        f"input shape: {tuple(reconstruction_input.shape[1:])}", flush=True,
-    )
     volume = reconstruct_volume(reconstruction_input, angles, geometry_args, geo)
     return volume, recon_subsample, args.mode == "cone"
 
 
 def main(args):
-    args.sVoxel = parse_svoxel(args.sVoxel)
-    svoxel_resolution = {"requested": args.sVoxel, "method": "explicit"}
+    gaussian_mode = getattr(args, "coordinate_mode", None) == "gaussian"
+    if gaussian_mode and args.mode != "parallel":
+        raise ValueError("--coordinate_mode gaussian requires --mode parallel")
+    svoxel_resolution = None
     args.input_dir = Path(args.input_dir)
     args.output_dir = Path(args.output_dir)
     args.config = Path(args.config) if args.config else None
@@ -213,8 +186,6 @@ def main(args):
         raise ValueError("--recon_pixel_subsample must be at least 1")
     if args.mode == "cone" and float(args.DSD) <= float(args.DSO):
         raise ValueError("--mode cone requires DSD > DSO")
-    if getattr(args, "coordinate_mode", "physical") == "gaussian" and args.mode != "parallel":
-        raise ValueError("--coordinate_mode gaussian requires --mode parallel")
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
         raise FileExistsError(
             f"FBP output directory is not fresh: {args.output_dir}. "
@@ -229,15 +200,9 @@ def main(args):
             + (f" matching {args.projection_glob}" if args.projection_glob else "")
         )
     if args.sVoxel == "auto":
-        args.sVoxel, svoxel_resolution = auto_svoxel_from_projection(
-            paths[0], args.pixel_size, args.pixel_subsample
-        )
-        print(
-            f"sVoxel auto: raw {svoxel_resolution['raw_shape']}, "
-            f"processed {svoxel_resolution['processed_shape']}, "
-            f"effective pixel size {svoxel_resolution['effective_pixel_size']:.10g} "
-            f"-> {args.sVoxel}", flush=True,
-        )
+        from scripts.auto_svoxel import auto_svoxel_from_projection
+        args.sVoxel, svoxel_resolution = auto_svoxel_from_projection(paths[0], args.pixel_size, args.pixel_subsample)
+        print(f"sVoxel auto: {svoxel_resolution['processed_shape']} -> {args.sVoxel}", flush=True)
     flat_paths = []
     flat_field = None
     if args.flat_field:
@@ -267,10 +232,10 @@ def main(args):
         config_candidates = sorted(args.input_dir.glob("*.txt"))
         args.config = config_candidates[0] if len(config_candidates) == 1 else None
 
-    # Physical-mode resampling needs raw TIFFs. Gaussian-mode resampling uses
-    # the saved projection field directly so rectangular views are not cropped.
+    # --recon_pixel_subsample needs the raw TIFFs again, so keep them only when
+    # that option is actually used.
     full_resolution = None
-    if args.recon_pixel_subsample is not None and getattr(args, "coordinate_mode", "physical") != "gaussian":
+    if args.recon_pixel_subsample is not None and not gaussian_mode:
         full_resolution = [tifffile.imread(path) for path in paths]
         projections_all = np.stack(
             [process_projection(image, args, flat=flat_field) for image in full_resolution], axis=0
@@ -318,8 +283,7 @@ def main(args):
                     "dark_value": float(args.dark_value),
                     "flat_eps": float(args.flat_eps),
                     "processed_shape": [int(x) for x in projections_all.shape],
-                    "sVoxel": args.sVoxel,
-                    "sVoxel_resolution": svoxel_resolution,
+                    **({"sVoxel": args.sVoxel, "sVoxel_resolution": svoxel_resolution} if svoxel_resolution else {}),
                     "angles_all": [float(x) for x in angles_all],
                     "angles_unique": [float(x) for x in angles],
                     "removed_duplicate_endpoint": bool(removed_endpoint),
@@ -357,7 +321,7 @@ def main(args):
     preview_low, preview_high = save_fbp_preview(
         output,
         volume,
-        preview_size(args),
+        preview_size(args) if gaussian_mode else args.sVoxel,
     )
 
     sparse_indices = None
@@ -405,7 +369,7 @@ def main(args):
         sparse_output.parent.mkdir(parents=True, exist_ok=True)
         np.save(sparse_output, sparse_volume)
         save_fbp_preview(
-            output, sparse_volume, preview_size(args), prefix=sparse_output.stem
+            output, sparse_volume, preview_size(args) if gaussian_mode else args.sVoxel, prefix=sparse_output.stem
         )
         print(f"Saved sparse FBP volume: {sparse_output}")
 
@@ -445,16 +409,6 @@ def main(args):
     }
     metadata = {
         "scanner": scanner,
-        "reconstruction": {
-            "coordinate_mode": getattr(args, "coordinate_mode", "physical"),
-            "preview_coordinate_system": (
-                "normalized_scene" if getattr(args, "coordinate_mode", "physical") == "gaussian"
-                else "dataset_units"
-            ),
-            "detector_size_for_fbp": reconstruction_scanner(
-                scanner, getattr(args, "coordinate_mode", "physical")
-            )["sDetector"],
-        },
         "vol": "vol_fbp.npy",
         "radius": 1.0,
         "bbox": [
@@ -464,7 +418,7 @@ def main(args):
         "proj_train": train_records,
         "proj_test": test_records,
         "source": {
-            "sVoxel_resolution": svoxel_resolution,
+            **({"sVoxel_resolution": svoxel_resolution} if svoxel_resolution else {}),
             "input_dir": str(args.input_dir.resolve()),
             "algorithm": (
                 "TIGRE cone-beam FDK" if args.mode == "cone" else "TIGRE parallel-beam FBP"
@@ -503,6 +457,9 @@ def main(args):
             "center_json": str(args.center_json.resolve()) if args.center_json else None,
         },
     }
+    if gaussian_mode:
+        from scripts.gaussian_fbp import reconstruction_metadata
+        metadata["reconstruction"] = reconstruction_metadata(scanner)
     with (output / "meta_data.json").open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
     print(f"Saved FBP volume: {output / 'vol_fbp.npy'}")
@@ -515,6 +472,13 @@ def main(args):
         f"Saved {len(angles)} full views, {len(train_records)} training views, "
         f"and {len(test_records)} test views"
     )
+
+
+def preview_size(args):
+    if getattr(args, "coordinate_mode", None) == "gaussian":
+        from scripts.gaussian_fbp import preview_size as gaussian_preview_size
+        return gaussian_preview_size(args.sVoxel)
+    return args.sVoxel
 
 
 def build_parser():
@@ -568,10 +532,6 @@ def build_parser():
         choices=["transmission", "intensity", "line_integral"],
         default="transmission",
         help="transmission/intensity applies -log(I/I0); line_integral skips it",
-    )
-    parser.add_argument(
-        "--coordinate_mode", choices=["physical", "gaussian"], default="physical",
-        help="FBP coordinates: measured geometry or the existing parallel Gaussian renderer.",
     )
     parser.add_argument(
         "--i0", type=float, default=1.0,
@@ -638,11 +598,8 @@ def build_parser():
         help="Optional sparse FBP .npy path; defaults to vol_sparse<N>_fbp.npy in output_dir.",
     )
     parser.add_argument("--nVoxel", nargs=3, type=int, default=[128, 128, 128])
-    parser.add_argument(
-        "--sVoxel", nargs="+", action=SVoxelAction, default=[2.0, 2.0, 2.0],
-        metavar="AUTO_OR_X_Y_Z",
-        help="Three XYZ lengths, or 'auto' to cover the processed training detector with a cube.",
-    )
+    parser.add_argument("--sVoxel", nargs="+", action=SVoxelAction, default=[2.0, 2.0, 2.0], metavar="AUTO_OR_X_Y_Z")
+    parser.add_argument("--coordinate_mode", choices=["physical", "gaussian"], default=None)
     parser.add_argument("--offOrigin", nargs=3, type=float, default=[0.0, 0.0, 0.0])
     parser.add_argument(
         "--offDetector", nargs=2, type=float, default=[0.0, 0.0],

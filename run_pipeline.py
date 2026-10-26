@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from scripts.fbp_geometry import SVoxelAction, auto_svoxel_from_projection, parse_svoxel
+from scripts.fbp_options import SVoxelAction, parse_svoxel_option
 
 
 ROOT = Path(__file__).resolve().parent
@@ -102,7 +102,6 @@ DEFAULTS: dict[str, Any] = {
     "fbp_angle_interval": 0.5,
     "fbp_keep_duplicate_endpoint": False,
     "fbp_mode": "parallel",
-    "fbp_coordinate_mode": "physical",
     "fbp_input_type": "line_integral",
     "fbp_i0": 1.0,
     "fbp_i0_mode": "percentile",
@@ -384,8 +383,7 @@ def build_parser() -> argparse.ArgumentParser:
     fbp_flag("sparse_views", type=int)
     fbp_flag("sparse_fbp_output", type=Path)
     fbp_flag("nVoxel", "--nVoxel", nargs=3, type=int, metavar=("X", "Y", "Z"))
-    fbp_flag("sVoxel", "--sVoxel", nargs="+", action=SVoxelAction, metavar="AUTO_OR_X_Y_Z",
-             help="Three XYZ lengths, or 'auto' from the current processed training detector")
+    fbp_flag("sVoxel", "--sVoxel", nargs="+", action=SVoxelAction, metavar="AUTO_OR_X_Y_Z")
     fbp_flag("offOrigin", nargs=3, type=float, metavar=("X", "Y", "Z"))
     fbp_flag("offDetector", nargs=2, type=float, metavar=("U", "V"))
     fbp_flag("DSD", "--DSD", type=float)
@@ -533,7 +531,7 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
     values = dict(DEFAULTS)
 
     def merge_loaded(loaded: dict[str, Any], source: Path) -> None:
-        unknown = sorted(set(loaded) - set(DEFAULTS))
+        unknown = sorted(set(loaded) - set(DEFAULTS) - {"fbp_coordinate_mode"})
         if unknown:
             raise ValueError(f"Unknown keys in {source}: {', '.join(unknown)}")
         values.update(loaded)
@@ -547,11 +545,16 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
         pipeline_config = Path(pipeline_config).resolve()
         merge_loaded(load_yaml(pipeline_config), pipeline_config)
     values.update(vars(parsed))
+    if values["fbp_sVoxel"] == "auto" or values["fbp_sVoxel"] == ["auto"]:
+        values["fbp_sVoxel"] = "auto"
+    elif isinstance(values["fbp_sVoxel"], str):
+        values["fbp_sVoxel"] = parse_svoxel_option(values["fbp_sVoxel"])
     for key in PATH_KEYS:
         if values.get(key) is not None and not isinstance(values[key], Path):
             values[key] = Path(values[key])
-    values["fbp_sVoxel"] = parse_svoxel(values["fbp_sVoxel"])
-    for key in ("fbp_nVoxel", "fbp_offOrigin", "fbp_offDetector", "fbp_free_ray", "manual_off_detector"):
+    for key in ("fbp_nVoxel", "fbp_sVoxel", "fbp_offOrigin", "fbp_offDetector", "fbp_free_ray", "manual_off_detector"):
+        if key == "fbp_sVoxel" and values[key] == "auto":
+            continue
         if values.get(key) is not None:
             values[key] = list(values[key])
 
@@ -588,7 +591,7 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
             output = Path(values["output_dir"])
             values["train_slice_reference_path"] = (
                 values.get("init_fbp_output") or output / (
-                    "vol_train_fbp_gaussian.npy" if values["fbp_coordinate_mode"] == "gaussian"
+                    "vol_train_fbp_gaussian.npy" if values.get("fbp_coordinate_mode") == "gaussian"
                     else "vol_train_fbp.npy"
                 )
             )
@@ -677,7 +680,6 @@ def build_fbp_command(args: argparse.Namespace, center_json: Path | None, manual
         ("fbp_dark_value", "--dark_value"), ("fbp_flat_eps", "--flat_eps"),
         ("fbp_config", "--config"), ("fbp_angle_start", "--angle_start"),
         ("fbp_angle_interval", "--angle_interval"), ("fbp_mode", "--mode"),
-        ("fbp_coordinate_mode", "--coordinate_mode"),
         ("fbp_input_type", "--input_type"), ("fbp_i0", "--i0"),
         ("fbp_i0_mode", "--i0_mode"), ("fbp_i0_percentile", "--i0_percentile"),
         ("fbp_i0_hi_percentile", "--i0_hi_percentile"), ("fbp_zero_policy", "--zero_policy"),
@@ -687,14 +689,18 @@ def build_fbp_command(args: argparse.Namespace, center_json: Path | None, manual
         ("fbp_projection_scale", "--projection_scale"), ("fbp_n_train", "--n_train"),
         ("fbp_n_test", "--n_test"), ("fbp_sparse_views", "--sparse_views"),
         ("fbp_sparse_fbp_output", "--sparse_fbp_output"), ("fbp_nVoxel", "--nVoxel"),
-        ("fbp_offOrigin", "--offOrigin"),
+        ("fbp_sVoxel", "--sVoxel"), ("fbp_offOrigin", "--offOrigin"),
         ("fbp_DSD", "--DSD"), ("fbp_DSO", "--DSO"), ("fbp_pixel_size", "--pixel_size"),
         ("fbp_accuracy", "--accuracy"), ("fbp_filter", "--filter"),
     )
     for name, flag in mapping:
-        add_option(command, flag, getattr(args, name))
-    add_option(command, "--sVoxel", "auto" if getattr(args, "fbp_sVoxel_requested", None) == "auto" else args.fbp_sVoxel)
+        value = getattr(args, name)
+        if name == "fbp_sVoxel" and getattr(args, "fbp_sVoxel_requested", None) == "auto":
+            value = "auto"
+        add_option(command, flag, value)
     add_option(command, "--seed", args.seed)
+    if getattr(args, "fbp_coordinate_mode", None) == "gaussian":
+        add_option(command, "--coordinate_mode", "gaussian")
     add_option(command, "--free_ray", args.fbp_free_ray)
     add_bool(command, "--flat_field", args.fbp_flat_field)
     add_bool(command, "--preprocess_only", args.fbp_preprocess_only)
@@ -708,12 +714,13 @@ def build_fbp_command(args: argparse.Namespace, center_json: Path | None, manual
 
 def build_init_command(args: argparse.Namespace, init_output: Path) -> list[str]:
     command = [sys.executable, str(ROOT / "init_from_fbp.py")]
+    if getattr(args, "fbp_coordinate_mode", None) == "gaussian":
+        add_option(command, "--coordinate_mode", "gaussian")
     if args.init_source == "full_fbp":
         add_option(command, "--volume", args.output_dir / "vol_fbp.npy")
     elif args.init_source == "train_fbp":
         add_option(command, "--dataset", args.output_dir)
         add_bool(command, "--use_train_fbp", True)
-        add_option(command, "--coordinate_mode", args.fbp_coordinate_mode)
         add_option(command, "--fbp_output", args.init_fbp_output)
     else:
         if args.init_volume is None:
@@ -850,15 +857,14 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("fbp_recon_pixel_subsample must be at least 1")
     if args.fbp_mode == "cone" and args.fbp_DSD <= args.fbp_DSO:
         raise ValueError("fbp_mode=cone requires fbp_DSD > fbp_DSO")
-    if args.fbp_coordinate_mode == "gaussian" and args.fbp_mode != "parallel":
-        raise ValueError("fbp_coordinate_mode=gaussian requires fbp_mode=parallel")
     if args.center_search_min_px >= args.center_search_max_px:
         raise ValueError("center_search_min_px must be smaller than center_search_max_px")
     if args.center_pair_min_offset_px >= args.center_pair_max_offset_px:
         raise ValueError("center_pair_min_offset_px must be smaller than center_pair_max_offset_px")
-    args.fbp_sVoxel = parse_svoxel(args.fbp_sVoxel)
-    if any(int(value) <= 0 for value in args.fbp_nVoxel):
-        raise ValueError("fbp_nVoxel must contain positive values")
+    if getattr(args, "fbp_coordinate_mode", None) == "gaussian" and args.fbp_mode != "parallel":
+        raise ValueError("fbp_coordinate_mode=gaussian requires fbp_mode=parallel")
+    if any(int(value) <= 0 for value in args.fbp_nVoxel) or (args.fbp_sVoxel != "auto" and any(float(value) <= 0 for value in args.fbp_sVoxel)):
+        raise ValueError("fbp_nVoxel and fbp_sVoxel must contain positive values")
     if args.fbp_n_train < 1 or args.fbp_n_test < 0:
         raise ValueError("fbp_n_train must be positive and fbp_n_test cannot be negative")
     if args.init_n_points < 1 or args.init_density_thresh < 0:
@@ -902,34 +908,9 @@ def stage_in_window(args: argparse.Namespace, stage: str) -> bool:
 
 
 def resolve_pipeline_svoxel(args: argparse.Namespace) -> None:
-    if args.fbp_sVoxel != "auto":
-        return
-    args.fbp_sVoxel_requested = "auto"
-    metadata_path = args.output_dir / "meta_data.json"
-    if not stage_in_window(args, "fbp") and metadata_path.exists():
-        # Continuing training must retain the already reconstructed grid,
-        # even when raw TIFFs have moved or preprocessing arguments changed.
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        values = parse_svoxel(metadata["scanner"]["sVoxel"])
-        if values == "auto":
-            raise ValueError("Existing dataset scanner.sVoxel must contain resolved lengths")
-        info = {"requested": "auto", "method": "existing_dataset",
-                "metadata_file": str(metadata_path), "resolved_sVoxel": values}
-    else:
-        from scripts.fbp_preprocess import select_tiff_paths
-
-        pattern = args.fbp_projection_glob
-        if args.fbp_flat_field and pattern is None:
-            pattern = "Tomo_*.tiff"
-        paths = select_tiff_paths(args.input_dir, pattern)
-        if not paths:
-            raise ValueError(f"sVoxel auto: no projection TIFFs found in {args.input_dir}")
-        values, info = auto_svoxel_from_projection(
-            paths[0], args.fbp_pixel_size, args.fbp_pixel_subsample
-        )
-    args.fbp_sVoxel = values
-    args.fbp_sVoxel_resolution = info
-    print(f"Resolved fbp_sVoxel auto: {values} ({info['method']})", flush=True)
+    if args.fbp_sVoxel == "auto":
+        from scripts.auto_svoxel import resolve_pipeline
+        resolve_pipeline(args, stage_in_window)
 
 
 def artifact_for_init(args: argparse.Namespace, init_output: Path) -> Path:
@@ -941,7 +922,8 @@ def main(args: argparse.Namespace) -> None:
     args.input_dir = Path(args.input_dir).resolve()
     args.output_dir = Path(args.output_dir).resolve()
     args.model_path = Path(args.model_path).resolve()
-    resolve_pipeline_svoxel(args)
+    if args.fbp_sVoxel == "auto":
+        resolve_pipeline_svoxel(args)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.fbp_preprocess_only and stage_in_window(args, "init"):
         raise ValueError("fbp_preprocess_only requires stop_after=fbp or skipping init/train/test")

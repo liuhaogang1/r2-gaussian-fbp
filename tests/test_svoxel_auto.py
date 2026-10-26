@@ -10,9 +10,10 @@ from unittest import mock
 import numpy as np
 import tifffile
 
-import prepare_fbp_tiff as prepare
+from fbp_test_support import import_prepare
+prepare = import_prepare()
 import run_pipeline as pipeline
-from scripts.fbp_geometry import (
+from scripts.auto_svoxel import (
     auto_svoxel_from_projection, detector_shape_after_preprocessing, parse_svoxel,
 )
 from scripts.fbp_preprocess import process_projection

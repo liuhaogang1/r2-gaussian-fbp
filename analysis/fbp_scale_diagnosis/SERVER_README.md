@@ -2,12 +2,16 @@
 
 在服务器 r2-gaussian-fbp 仓库根目录 git pull 获取更新。
 修改涉及 prepare_fbp_tiff.py、init_from_fbp.py、run_pipeline.py、
-scripts/fbp_geometry.py、scripts/run_cata4_gaussian_fbp.sh 和回归测试。
+独立可选模块 scripts/auto_svoxel.py、scripts/gaussian_fbp.py、
+scripts/fbp_geometry.py、参数解析边界 scripts/fbp_options.py 和回归测试。
 未修改 Gaussian 渲染器、训练器或位姿配置。无需重新编译 CUDA 扩展。
 
 示例现使用 --fbp_sVoxel auto，根据当前训练投影视野和 pixel_size 计算，
 不再固定 cata1 的 0.01344 mm。Cata4 不降采样时为 0.02432 mm。
 auto 不会开启 gaussian 兼容模式；两个参数相互独立。
+不传新选项时，旧命令沿用修改前 964783a 的流程，包括旧缓存复用、
+点坐标映射和物理单位预览。数据集元数据不会自动开启 gaussian。
+下方示例脚本显式开启两个功能，运行该脚本即选择启用。
 
 在服务器仓库根目录先运行：
 
@@ -50,7 +54,10 @@ bash scripts/run_cata4_gaussian_fbp.sh --start_from train
 gaussian 模式下的 NIfTI 预览和 test.py 一样使用归一化场景单位，
 不能将其间距直接当作毫米标定。默认 physical 模式仍可用于原物理几何重建。
 
-本地验证：25 项测试中 23 项通过，2 项 SimpleITK 读取测试因缺少依赖跳过。
-包括已知圆盘的 CPU 滤波反投影、位置/半径恢复、完整/训练 FBP 路径参数检查、
-元数据和投影保持检查、缓存失效检查。当前本地无 TIGRE/CUDA 运行环境，
+本地验证包括已知圆盘的 CPU 滤波反投影、位置/半径恢复、完整/训练 FBP
+路径检查、Gaussian 专用缓存失效检查，以及与 964783a 的默认流程对比。
+默认流程对比覆盖阶段命令、manifest、输出元数据与数组、几何、预览参数、
+非立方体点云和旧缓存复用；未启用功能时禁止导入可选实现模块。
+这些测试使用 CPU 重建替身验证流程，不等于真实 GPU 数值一致性测试。
+当前本地无 TIGRE/CUDA；SimpleITK 读取测试因缺少依赖跳过，
 尚未在真实数据上重跑 GPU 重建或训练。

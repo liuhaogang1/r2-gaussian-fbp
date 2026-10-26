@@ -82,6 +82,23 @@ PyTorch/CUDA 环境中运行 `scripts/build_pose_rasterizer.ps1`；默认流程�
 
 ## 自动计算重建视野 sVoxel
 
+两个新功能均为显式选择，默认关闭，功能实现分别在
+`scripts/auto_svoxel.py` 和 `scripts/gaussian_fbp.py`（几何辅助函数在
+`scripts/fbp_geometry.py`）。主流程只保留参数判断和调用入口。
+不传新选项、继续使用原来的三个数值时，保留两次修改前（`964783a`）的
+重建几何、降采样、预览单位、初始化坐标、缓存规则和命令生成逻辑。
+
+| 管线参数 | 自动计算 sVoxel | Gaussian 坐标适配 |
+| --- | --- | --- |
+| 原有命令，sVoxel 为三个数值或不传 | 关闭 | 关闭，沿用原流程 |
+| `--fbp_sVoxel auto` | 开启 | 关闭 |
+| `--fbp_coordinate_mode gaussian`，sVoxel 为三个数值 | 关闭 | 开启 |
+| `--fbp_sVoxel auto --fbp_coordinate_mode gaussian` | 开启 | 开启 |
+
+显式写 `--fbp_coordinate_mode physical` 也沿用原流程。配置文件中明确设置
+`fbp.coordinate_mode: gaussian` 或 `fbp.sVoxel: auto` 等同于显式传参。
+已有数据集的 `reconstruction.coordinate_mode` 不会自动启用任何功能。
+
 管线支持 `--fbp_sVoxel auto`（别名 `--sVoxel auto`），单独预处理支持
 `python prepare_fbp_tiff.py ... --sVoxel auto`。原有三个数值的写法仍有效；
 不传该选项时默认仍为 `2 2 2`，不会自动改变旧命令。YAML 可写 `fbp: {sVoxel: auto}`。
@@ -111,13 +128,13 @@ source.sVoxel_resolution 及 pipeline_manifest.json 的 resolved_arguments 中�
 避免重新推算已存在体数据的坐标；即使原始 TIFF 已移动也可继续。
 
 auto 与下方 coordinate_mode 是两个独立选择。仅修正逐数据 FOV，可使用
-`--fbp_sVoxel auto --fbp_coordinate_mode physical`；要让 FBP 兼容现有
+`--fbp_sVoxel auto`；要让 FBP 兼容现有
 Gaussian 的投影坐标，可使用 `--fbp_sVoxel auto --fbp_coordinate_mode gaussian`。
 
 ## FBP 与现有 Gaussian 视野一致
 
 若要保留现有平行束 Gaussian 的重建尺度，让完整 FBP 和初始化匹配它，
-在管线命令中添加 `--fbp_coordinate_mode gaussian`。默认 `physical` 保留原来的
+在管线命令中添加 `--fbp_coordinate_mode gaussian`。不传该参数时保留原来的
 物理探测器几何。新模式仅改变解析重建使用的虚拟探测器视野：两个方向
 均使用 `max(sVoxel)`，与现有 Gaussian 的单位平行投影矩阵一致。
 训练投影、原始 scanner 元数据、Gaussian 渲染器和位姿配置保留原值。
@@ -136,9 +153,13 @@ bash scripts/run_cata4_gaussian_fbp.sh --stop_after init
 检查后执行 `bash scripts/run_cata4_gaussian_fbp.sh --start_from train` 完成训练与测试。
 首次运行时也可以不加阶段参数，直接执行完整流程。
 
-`train_fbp` 自动继承数据集中的坐标模式，使用独立的
-`vol_train_fbp_gaussian.npy` 缓存，并核对几何、角度和投影文件状态。
-旧缓存缺少几何签名时会重算。切换模式时不要用 `--resume` 跳过旧 FBP/init。
+仅显式开启 Gaussian 模式时，`train_fbp` 使用独立的
+`vol_train_fbp_gaussian.npy` 缓存，并核对几何、角度和投影文件状态；
+该模式的缓存缺少几何签名时会重算。管线会把开启参数同时传给 FBP 和初始化，
+单独运行初始化脚本则必须显式传 `--coordinate_mode gaussian`。
+不传时仍按原规则复用 `vol_train_fbp.npy`，不新增签名校验；
+非立方体和 offOrigin 的点坐标修正、归一化 NIfTI 间距也仅在 Gaussian 模式启用。
+切换模式时不要用 `--resume` 跳过旧 FBP/init。
 旧物理 FBP 已裁掉的区域无法靠点云缩放恢复，应从投影重新反投影。
 
 单独使用已有训练投影生成兼容初始化时：
