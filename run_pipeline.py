@@ -101,6 +101,7 @@ DEFAULTS: dict[str, Any] = {
     "fbp_angle_interval": 0.5,
     "fbp_keep_duplicate_endpoint": False,
     "fbp_mode": "parallel",
+    "fbp_coordinate_mode": "physical",
     "fbp_input_type": "line_integral",
     "fbp_i0": 1.0,
     "fbp_i0_mode": "percentile",
@@ -363,6 +364,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_bool(parser, "--fbp_keep_duplicate_endpoint", "fbp_keep_duplicate_endpoint")
     _add(parser, "--keep_duplicate_endpoint", dest="fbp_keep_duplicate_endpoint", action="store_true")
     fbp_flag("mode", "--mode", choices=["parallel", "cone"])
+    fbp_flag("coordinate_mode", choices=["physical", "gaussian"])
     fbp_flag("input_type", "--input_type", choices=["transmission", "intensity", "line_integral"])
     fbp_flag("i0", "--i0", type=float)
     fbp_flag("i0_mode", "--i0_mode", choices=["percentile", "free_ray", "fixed"])
@@ -582,7 +584,10 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
         elif values.get("init_source") == "train_fbp":
             output = Path(values["output_dir"])
             values["train_slice_reference_path"] = (
-                values.get("init_fbp_output") or output / "vol_train_fbp.npy"
+                values.get("init_fbp_output") or output / (
+                    "vol_train_fbp_gaussian.npy" if values["fbp_coordinate_mode"] == "gaussian"
+                    else "vol_train_fbp.npy"
+                )
             )
         else:
             values["train_slice_reference_path"] = Path(values["output_dir"]) / "vol_fbp.npy"
@@ -669,6 +674,7 @@ def build_fbp_command(args: argparse.Namespace, center_json: Path | None, manual
         ("fbp_dark_value", "--dark_value"), ("fbp_flat_eps", "--flat_eps"),
         ("fbp_config", "--config"), ("fbp_angle_start", "--angle_start"),
         ("fbp_angle_interval", "--angle_interval"), ("fbp_mode", "--mode"),
+        ("fbp_coordinate_mode", "--coordinate_mode"),
         ("fbp_input_type", "--input_type"), ("fbp_i0", "--i0"),
         ("fbp_i0_mode", "--i0_mode"), ("fbp_i0_percentile", "--i0_percentile"),
         ("fbp_i0_hi_percentile", "--i0_hi_percentile"), ("fbp_zero_policy", "--zero_policy"),
@@ -703,6 +709,7 @@ def build_init_command(args: argparse.Namespace, init_output: Path) -> list[str]
     elif args.init_source == "train_fbp":
         add_option(command, "--dataset", args.output_dir)
         add_bool(command, "--use_train_fbp", True)
+        add_option(command, "--coordinate_mode", args.fbp_coordinate_mode)
         add_option(command, "--fbp_output", args.init_fbp_output)
     else:
         if args.init_volume is None:
@@ -839,6 +846,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("fbp_recon_pixel_subsample must be at least 1")
     if args.fbp_mode == "cone" and args.fbp_DSD <= args.fbp_DSO:
         raise ValueError("fbp_mode=cone requires fbp_DSD > fbp_DSO")
+    if args.fbp_coordinate_mode == "gaussian" and args.fbp_mode != "parallel":
+        raise ValueError("fbp_coordinate_mode=gaussian requires fbp_mode=parallel")
     if args.center_search_min_px >= args.center_search_max_px:
         raise ValueError("center_search_min_px must be smaller than center_search_max_px")
     if args.center_pair_min_offset_px >= args.center_pair_max_offset_px:

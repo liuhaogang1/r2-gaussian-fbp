@@ -11,8 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import tifffile
-import tigre
-import tigre.algorithms as algs
+from scripts.fbp_geometry import reconstruction_scanner
 from scripts.fbp_preprocess import (
     build_angles,
     load_flat_field,
@@ -60,6 +59,13 @@ def save_fbp_preview(
     return float(low), float(high)
 
 
+def preview_size(args):
+    size = np.asarray(args.sVoxel, dtype=np.float64)
+    if getattr(args, "coordinate_mode", "physical") == "gaussian":
+        size = size * (2.0 / float(size.max()))
+    return size
+
+
 def build_geometry(args, detector_shape):
     """Build the TIGRE geometry for parallel FBP or cone FDK.
 
@@ -68,6 +74,8 @@ def build_geometry(args, detector_shape):
     is the pixel size at the rotation axis, i.e. the detector pixel pitch
     divided by the geometric magnification ``DSD / DSO``.
     """
+    import tigre
+
     height, width = detector_shape
     effective_pixel_size = args.pixel_size * args.pixel_subsample
     mode = args.mode
@@ -81,6 +89,11 @@ def build_geometry(args, detector_shape):
         [height * effective_pixel_size, width * effective_pixel_size],
         dtype=np.float32,
     )
+    effective_scanner = reconstruction_scanner(
+        {"mode": mode, "sVoxel": args.sVoxel, "sDetector": geo.sDetector.tolist()},
+        getattr(args, "coordinate_mode", "physical"),
+    )
+    geo.sDetector = np.asarray(effective_scanner["sDetector"], dtype=np.float32)
     geo.dDetector = geo.sDetector / geo.nDetector
     geo.nVoxel = np.asarray(args.nVoxel[::-1], dtype=np.int32)
     geo.sVoxel = np.asarray(args.sVoxel[::-1], dtype=np.float32)
@@ -99,6 +112,8 @@ def build_geometry(args, detector_shape):
 
 def reconstruct_volume(projections, angles, args, geo):
     """FBP for parallel-beam geometry, FDK for cone-beam geometry."""
+    import tigre.algorithms as algs
+
     if args.mode == "cone":
         volume_tigre = algs.fdk(projections[:, ::-1, :], geo, angles)
     else:
@@ -139,6 +154,20 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images, f
     if recon_subsample == args.pixel_subsample:
         geometry_args = args
         reconstruction_input = projections
+    elif getattr(args, "coordinate_mode", "physical") == "gaussian":
+        # Preserve the entire normalized detector field when reducing FBP
+        # cost. Raw preprocessing would crop a rectangular detector square.
+        from scipy.ndimage import zoom
+
+        geometry_args = argparse.Namespace(**vars(args))
+        geometry_args.pixel_subsample = recon_subsample
+        height, width = projections.shape[1:]
+        new_height = max(1, height * args.pixel_subsample // recon_subsample)
+        new_width = max(1, width * args.pixel_subsample // recon_subsample)
+        reconstruction_input = zoom(
+            projections, (1, new_height / height, new_width / width),
+            order=args.resize_order,
+        ).astype(np.float32)
     else:
         if raw_images is None:
             raise ValueError(
@@ -160,6 +189,11 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images, f
             flush=True,
         )
     geo = build_geometry(geometry_args, reconstruction_input.shape[1:])
+    print(
+        f"FBP coordinate mode: {getattr(args, 'coordinate_mode', 'physical')}; "
+        f"detector V/U size: {geo.sDetector.tolist()}; "
+        f"input shape: {tuple(reconstruction_input.shape[1:])}", flush=True,
+    )
     volume = reconstruct_volume(reconstruction_input, angles, geometry_args, geo)
     return volume, recon_subsample, args.mode == "cone"
 
@@ -175,6 +209,8 @@ def main(args):
         raise ValueError("--recon_pixel_subsample must be at least 1")
     if args.mode == "cone" and float(args.DSD) <= float(args.DSO):
         raise ValueError("--mode cone requires DSD > DSO")
+    if getattr(args, "coordinate_mode", "physical") == "gaussian" and args.mode != "parallel":
+        raise ValueError("--coordinate_mode gaussian requires --mode parallel")
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
         raise FileExistsError(
             f"FBP output directory is not fresh: {args.output_dir}. "
@@ -217,10 +253,10 @@ def main(args):
         config_candidates = sorted(args.input_dir.glob("*.txt"))
         args.config = config_candidates[0] if len(config_candidates) == 1 else None
 
-    # --recon_pixel_subsample needs the raw TIFFs again, so keep them only when
-    # that option is actually used.
+    # Physical-mode resampling needs raw TIFFs. Gaussian-mode resampling uses
+    # the saved projection field directly so rectangular views are not cropped.
     full_resolution = None
-    if args.recon_pixel_subsample is not None:
+    if args.recon_pixel_subsample is not None and getattr(args, "coordinate_mode", "physical") != "gaussian":
         full_resolution = [tifffile.imread(path) for path in paths]
         projections_all = np.stack(
             [process_projection(image, args, flat=flat_field) for image in full_resolution], axis=0
@@ -305,7 +341,7 @@ def main(args):
     preview_low, preview_high = save_fbp_preview(
         output,
         volume,
-        args.sVoxel,
+        preview_size(args),
     )
 
     sparse_indices = None
@@ -353,7 +389,7 @@ def main(args):
         sparse_output.parent.mkdir(parents=True, exist_ok=True)
         np.save(sparse_output, sparse_volume)
         save_fbp_preview(
-            output, sparse_volume, args.sVoxel, prefix=sparse_output.stem
+            output, sparse_volume, preview_size(args), prefix=sparse_output.stem
         )
         print(f"Saved sparse FBP volume: {sparse_output}")
 
@@ -393,6 +429,16 @@ def main(args):
     }
     metadata = {
         "scanner": scanner,
+        "reconstruction": {
+            "coordinate_mode": getattr(args, "coordinate_mode", "physical"),
+            "preview_coordinate_system": (
+                "normalized_scene" if getattr(args, "coordinate_mode", "physical") == "gaussian"
+                else "dataset_units"
+            ),
+            "detector_size_for_fbp": reconstruction_scanner(
+                scanner, getattr(args, "coordinate_mode", "physical")
+            )["sDetector"],
+        },
         "vol": "vol_fbp.npy",
         "radius": 1.0,
         "bbox": [
@@ -454,7 +500,7 @@ def main(args):
     )
 
 
-if __name__ == "__main__":
+def build_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_dir", required=True)
     parser.add_argument("--output_dir", required=True)
@@ -505,6 +551,10 @@ if __name__ == "__main__":
         choices=["transmission", "intensity", "line_integral"],
         default="transmission",
         help="transmission/intensity applies -log(I/I0); line_integral skips it",
+    )
+    parser.add_argument(
+        "--coordinate_mode", choices=["physical", "gaussian"], default="physical",
+        help="FBP coordinates: measured geometry or the existing parallel Gaussian renderer.",
     )
     parser.add_argument(
         "--i0", type=float, default=1.0,
@@ -587,4 +637,8 @@ if __name__ == "__main__":
         default="hann",
     )
     parser.add_argument("--seed", type=int, default=0)
-    main(parser.parse_args())
+    return parser
+
+
+if __name__ == "__main__":
+    main(build_parser().parse_args())

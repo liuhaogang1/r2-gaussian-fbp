@@ -80,6 +80,43 @@ PyTorch/CUDA 环境中运行 `scripts/build_pose_rasterizer.ps1`；默认流程�
 <model_path>/test/iter_*/
 ```
 
+## FBP 与现有 Gaussian 视野一致
+
+若要保留现有平行束 Gaussian 的重建尺度，让完整 FBP 和初始化匹配它，
+在管线命令中添加 `--fbp_coordinate_mode gaussian`。默认 `physical` 保留原来的
+物理探测器几何。新模式仅改变解析重建使用的虚拟探测器视野：两个方向
+均使用 `max(sVoxel)`，与现有 Gaussian 的单位平行投影矩阵一致。
+训练投影、原始 scanner 元数据、Gaussian 渲染器和位姿配置保留原值。
+这是坐标兼容方案，不代表 Gaussian 外观尺度已经完成绝对物理标定。
+
+用户提供的 cata1 投影为 204×336，40 nm 像素对应参考边长 `0.01344 mm`。
+若其他实验沿用该参考边长，不需要继续猜测 FOV。Cata4 完整命令保存在
+`scripts/run_cata4_gaussian_fbp.sh`，在服务器仓库根目录执行：
+
+```bash
+bash scripts/run_cata4_gaussian_fbp.sh --stop_after init
+```
+
+该命令使用新的数据集和模型目录，先运行中心估计、完整 FBP 和初始化，
+生成 `vol_train_fbp_gaussian.nii.gz`（同 test.py 的归一化 spacing）及点云预览。
+检查后执行 `bash scripts/run_cata4_gaussian_fbp.sh --start_from train` 完成训练与测试。
+首次运行时也可以不加阶段参数，直接执行完整流程。
+
+`train_fbp` 自动继承数据集中的坐标模式，使用独立的
+`vol_train_fbp_gaussian.npy` 缓存，并核对几何、角度和投影文件状态。
+旧缓存缺少几何签名时会重算。切换模式时不要用 `--resume` 跳过旧 FBP/init。
+旧物理 FBP 已裁掉的区域无法靠点云缩放恢复，应从投影重新反投影。
+
+单独使用已有训练投影生成兼容初始化时：
+
+```bash
+python init_from_fbp.py --dataset /path/to/dataset --use_train_fbp \
+  --coordinate_mode gaussian --visualize_fbp_nii --visualize --visualize_slices
+```
+
+该命令不修改已有数据集的参考 `vol_fbp.npy` 或元数据；完整对比实验建议
+使用新的管线输出目录。
+
 ## 分阶段运行
 
 四个脚本也可以单独运行。FBP 输出目录必须是新的空目录；初始化脚本默认使用 `vol_fbp.npy`，并可单独打开 `--visualize` 或 `--visualize_slices`。使用训练视角重建时，可以额外用 `--visualize_fbp_nii` 将完整的稀疏视角 FBP 体导出为 3D Slicer 可读取的 NIfTI：
