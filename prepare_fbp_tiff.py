@@ -11,7 +11,9 @@ from pathlib import Path
 
 import numpy as np
 import tifffile
-from scripts.fbp_geometry import reconstruction_scanner
+from scripts.fbp_geometry import (
+    SVoxelAction, auto_svoxel_from_projection, parse_svoxel, reconstruction_scanner,
+)
 from scripts.fbp_preprocess import (
     build_angles,
     load_flat_field,
@@ -199,6 +201,8 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images, f
 
 
 def main(args):
+    args.sVoxel = parse_svoxel(args.sVoxel)
+    svoxel_resolution = {"requested": args.sVoxel, "method": "explicit"}
     args.input_dir = Path(args.input_dir)
     args.output_dir = Path(args.output_dir)
     args.config = Path(args.config) if args.config else None
@@ -223,6 +227,16 @@ def main(args):
         raise ValueError(
             f"No projection TIFF files found in {args.input_dir}"
             + (f" matching {args.projection_glob}" if args.projection_glob else "")
+        )
+    if args.sVoxel == "auto":
+        args.sVoxel, svoxel_resolution = auto_svoxel_from_projection(
+            paths[0], args.pixel_size, args.pixel_subsample
+        )
+        print(
+            f"sVoxel auto: raw {svoxel_resolution['raw_shape']}, "
+            f"processed {svoxel_resolution['processed_shape']}, "
+            f"effective pixel size {svoxel_resolution['effective_pixel_size']:.10g} "
+            f"-> {args.sVoxel}", flush=True,
         )
     flat_paths = []
     flat_field = None
@@ -304,6 +318,8 @@ def main(args):
                     "dark_value": float(args.dark_value),
                     "flat_eps": float(args.flat_eps),
                     "processed_shape": [int(x) for x in projections_all.shape],
+                    "sVoxel": args.sVoxel,
+                    "sVoxel_resolution": svoxel_resolution,
                     "angles_all": [float(x) for x in angles_all],
                     "angles_unique": [float(x) for x in angles],
                     "removed_duplicate_endpoint": bool(removed_endpoint),
@@ -448,6 +464,7 @@ def main(args):
         "proj_train": train_records,
         "proj_test": test_records,
         "source": {
+            "sVoxel_resolution": svoxel_resolution,
             "input_dir": str(args.input_dir.resolve()),
             "algorithm": (
                 "TIGRE cone-beam FDK" if args.mode == "cone" else "TIGRE parallel-beam FBP"
@@ -621,7 +638,11 @@ def build_parser():
         help="Optional sparse FBP .npy path; defaults to vol_sparse<N>_fbp.npy in output_dir.",
     )
     parser.add_argument("--nVoxel", nargs=3, type=int, default=[128, 128, 128])
-    parser.add_argument("--sVoxel", nargs=3, type=float, default=[2.0, 2.0, 2.0])
+    parser.add_argument(
+        "--sVoxel", nargs="+", action=SVoxelAction, default=[2.0, 2.0, 2.0],
+        metavar="AUTO_OR_X_Y_Z",
+        help="Three XYZ lengths, or 'auto' to cover the processed training detector with a cube.",
+    )
     parser.add_argument("--offOrigin", nargs=3, type=float, default=[0.0, 0.0, 0.0])
     parser.add_argument(
         "--offDetector", nargs=2, type=float, default=[0.0, 0.0],

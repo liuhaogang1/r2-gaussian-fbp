@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from scripts.fbp_geometry import SVoxelAction, auto_svoxel_from_projection, parse_svoxel
 
 
 ROOT = Path(__file__).resolve().parent
@@ -383,7 +384,8 @@ def build_parser() -> argparse.ArgumentParser:
     fbp_flag("sparse_views", type=int)
     fbp_flag("sparse_fbp_output", type=Path)
     fbp_flag("nVoxel", "--nVoxel", nargs=3, type=int, metavar=("X", "Y", "Z"))
-    fbp_flag("sVoxel", "--sVoxel", nargs=3, type=float, metavar=("X", "Y", "Z"))
+    fbp_flag("sVoxel", "--sVoxel", nargs="+", action=SVoxelAction, metavar="AUTO_OR_X_Y_Z",
+             help="Three XYZ lengths, or 'auto' from the current processed training detector")
     fbp_flag("offOrigin", nargs=3, type=float, metavar=("X", "Y", "Z"))
     fbp_flag("offDetector", nargs=2, type=float, metavar=("U", "V"))
     fbp_flag("DSD", "--DSD", type=float)
@@ -548,7 +550,8 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
     for key in PATH_KEYS:
         if values.get(key) is not None and not isinstance(values[key], Path):
             values[key] = Path(values[key])
-    for key in ("fbp_nVoxel", "fbp_sVoxel", "fbp_offOrigin", "fbp_offDetector", "fbp_free_ray", "manual_off_detector"):
+    values["fbp_sVoxel"] = parse_svoxel(values["fbp_sVoxel"])
+    for key in ("fbp_nVoxel", "fbp_offOrigin", "fbp_offDetector", "fbp_free_ray", "manual_off_detector"):
         if values.get(key) is not None:
             values[key] = list(values[key])
 
@@ -684,12 +687,13 @@ def build_fbp_command(args: argparse.Namespace, center_json: Path | None, manual
         ("fbp_projection_scale", "--projection_scale"), ("fbp_n_train", "--n_train"),
         ("fbp_n_test", "--n_test"), ("fbp_sparse_views", "--sparse_views"),
         ("fbp_sparse_fbp_output", "--sparse_fbp_output"), ("fbp_nVoxel", "--nVoxel"),
-        ("fbp_sVoxel", "--sVoxel"), ("fbp_offOrigin", "--offOrigin"),
+        ("fbp_offOrigin", "--offOrigin"),
         ("fbp_DSD", "--DSD"), ("fbp_DSO", "--DSO"), ("fbp_pixel_size", "--pixel_size"),
         ("fbp_accuracy", "--accuracy"), ("fbp_filter", "--filter"),
     )
     for name, flag in mapping:
         add_option(command, flag, getattr(args, name))
+    add_option(command, "--sVoxel", "auto" if getattr(args, "fbp_sVoxel_requested", None) == "auto" else args.fbp_sVoxel)
     add_option(command, "--seed", args.seed)
     add_option(command, "--free_ray", args.fbp_free_ray)
     add_bool(command, "--flat_field", args.fbp_flat_field)
@@ -852,8 +856,9 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("center_search_min_px must be smaller than center_search_max_px")
     if args.center_pair_min_offset_px >= args.center_pair_max_offset_px:
         raise ValueError("center_pair_min_offset_px must be smaller than center_pair_max_offset_px")
-    if any(int(value) <= 0 for value in args.fbp_nVoxel) or any(float(value) <= 0 for value in args.fbp_sVoxel):
-        raise ValueError("fbp_nVoxel and fbp_sVoxel must contain positive values")
+    args.fbp_sVoxel = parse_svoxel(args.fbp_sVoxel)
+    if any(int(value) <= 0 for value in args.fbp_nVoxel):
+        raise ValueError("fbp_nVoxel must contain positive values")
     if args.fbp_n_train < 1 or args.fbp_n_test < 0:
         raise ValueError("fbp_n_train must be positive and fbp_n_test cannot be negative")
     if args.init_n_points < 1 or args.init_density_thresh < 0:
@@ -896,6 +901,37 @@ def stage_in_window(args: argparse.Namespace, stage: str) -> bool:
     return not bool(getattr(args, "skip_" + stage))
 
 
+def resolve_pipeline_svoxel(args: argparse.Namespace) -> None:
+    if args.fbp_sVoxel != "auto":
+        return
+    args.fbp_sVoxel_requested = "auto"
+    metadata_path = args.output_dir / "meta_data.json"
+    if not stage_in_window(args, "fbp") and metadata_path.exists():
+        # Continuing training must retain the already reconstructed grid,
+        # even when raw TIFFs have moved or preprocessing arguments changed.
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        values = parse_svoxel(metadata["scanner"]["sVoxel"])
+        if values == "auto":
+            raise ValueError("Existing dataset scanner.sVoxel must contain resolved lengths")
+        info = {"requested": "auto", "method": "existing_dataset",
+                "metadata_file": str(metadata_path), "resolved_sVoxel": values}
+    else:
+        from scripts.fbp_preprocess import select_tiff_paths
+
+        pattern = args.fbp_projection_glob
+        if args.fbp_flat_field and pattern is None:
+            pattern = "Tomo_*.tiff"
+        paths = select_tiff_paths(args.input_dir, pattern)
+        if not paths:
+            raise ValueError(f"sVoxel auto: no projection TIFFs found in {args.input_dir}")
+        values, info = auto_svoxel_from_projection(
+            paths[0], args.fbp_pixel_size, args.fbp_pixel_subsample
+        )
+    args.fbp_sVoxel = values
+    args.fbp_sVoxel_resolution = info
+    print(f"Resolved fbp_sVoxel auto: {values} ({info['method']})", flush=True)
+
+
 def artifact_for_init(args: argparse.Namespace, init_output: Path) -> Path:
     return Path(args.train_ply_path or init_output).resolve()
 
@@ -905,6 +941,7 @@ def main(args: argparse.Namespace) -> None:
     args.input_dir = Path(args.input_dir).resolve()
     args.output_dir = Path(args.output_dir).resolve()
     args.model_path = Path(args.model_path).resolve()
+    resolve_pipeline_svoxel(args)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.fbp_preprocess_only and stage_in_window(args, "init"):
         raise ValueError("fbp_preprocess_only requires stop_after=fbp or skipping init/train/test")

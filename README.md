@@ -80,6 +80,40 @@ PyTorch/CUDA 环境中运行 `scripts/build_pose_rasterizer.ps1`；默认流程�
 <model_path>/test/iter_*/
 ```
 
+## 自动计算重建视野 sVoxel
+
+管线支持 `--fbp_sVoxel auto`（别名 `--sVoxel auto`），单独预处理支持
+`python prepare_fbp_tiff.py ... --sVoxel auto`。原有三个数值的写法仍有效；
+不传该选项时默认仍为 `2 2 2`，不会自动改变旧命令。YAML 可写 `fbp: {sVoxel: auto}`。
+
+auto 从当前输入目录、当前 projection_glob 选中的第一张投影读取 TIFF 头，
+根据训练投影的 pixel_subsample 和现有中心裁剪规则，得到实际保存投影的 H、W：
+
+```text
+p_effective = pixel_size × pixel_subsample
+L = max(H, W) × p_effective
+sVoxel = [L, L, L]
+```
+
+当前 pixel_subsample=1 时保留原始矩形图像；大于 1 时旧预处理会缩小后
+中心裁成近似正方形（奇数差可能保留一像素），auto 按保留的视野计算。
+只用于解析重建的 recon_pixel_subsample 不决定 auto 的视野。
+pixel_size 必须是正有限数，单位与其他几何一致；锥束仍沿用脚本约定，
+将 pixel_size 解释为旋转轴平面像素间距。nVoxel 只决定采样数，不决定 L。
+
+40 nm、训练投影不降采样时：cata1 的 204×336 对应 0.01344 mm；
+cata3_2 的 360×476 对应 0.01904 mm；Cata4 的 608×604 对应 0.02432 mm。
+这个规则选择覆盖投影视野的立方体，不会推断样品的真实边界或最佳 ROI。
+
+计算结果和来源会打印到终端，并保存在 meta_data.json 的 scanner.sVoxel、
+source.sVoxel_resolution 及 pipeline_manifest.json 的 resolved_arguments 中。
+从 train 等后续阶段继续时，auto 优先沿用现有数据集的 scanner.sVoxel，
+避免重新推算已存在体数据的坐标；即使原始 TIFF 已移动也可继续。
+
+auto 与下方 coordinate_mode 是两个独立选择。仅修正逐数据 FOV，可使用
+`--fbp_sVoxel auto --fbp_coordinate_mode physical`；要让 FBP 兼容现有
+Gaussian 的投影坐标，可使用 `--fbp_sVoxel auto --fbp_coordinate_mode gaussian`。
+
 ## FBP 与现有 Gaussian 视野一致
 
 若要保留现有平行束 Gaussian 的重建尺度，让完整 FBP 和初始化匹配它，
@@ -89,8 +123,8 @@ PyTorch/CUDA 环境中运行 `scripts/build_pose_rasterizer.ps1`；默认流程�
 训练投影、原始 scanner 元数据、Gaussian 渲染器和位姿配置保留原值。
 这是坐标兼容方案，不代表 Gaussian 外观尺度已经完成绝对物理标定。
 
-用户提供的 cata1 投影为 204×336，40 nm 像素对应参考边长 `0.01344 mm`。
-若其他实验沿用该参考边长，不需要继续猜测 FOV。Cata4 完整命令保存在
+旧示例曾固定 cata1 的参考边长 `0.01344 mm`；该数值不应作为所有数据的
+物理视野。现在示例使用 auto 为当前数据计算。Cata4 完整命令保存在
 `scripts/run_cata4_gaussian_fbp.sh`，在服务器仓库根目录执行：
 
 ```bash

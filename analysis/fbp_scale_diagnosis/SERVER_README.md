@@ -1,12 +1,13 @@
 # Gaussian 视野兼容修正
 
-将压缩包中的文件按相同相对路径放入服务器的 r2-gaussian-fbp 仓库根目录。
-包内更新 prepare_fbp_tiff.py、init_from_fbp.py、run_pipeline.py，并新增
+在服务器 r2-gaussian-fbp 仓库根目录 git pull 获取更新。
+修改涉及 prepare_fbp_tiff.py、init_from_fbp.py、run_pipeline.py、
 scripts/fbp_geometry.py、scripts/run_cata4_gaussian_fbp.sh 和回归测试。
 未修改 Gaussian 渲染器、训练器或位姿配置。无需重新编译 CUDA 扩展。
 
-提供的 cata1 TIFF 尺寸为 204×336，因此旧命令的参考 FOV_MM 为
-336×0.00004=0.01344 mm。新示例直接使用这个参考值，不再读取其他数据集。
+示例现使用 --fbp_sVoxel auto，根据当前训练投影视野和 pixel_size 计算，
+不再固定 cata1 的 0.01344 mm。Cata4 不降采样时为 0.02432 mm。
+auto 不会开启 gaussian 兼容模式；两个参数相互独立。
 
 在服务器仓库根目录先运行：
 
@@ -17,11 +18,11 @@ bash scripts/run_cata4_gaussian_fbp.sh --stop_after init
 查看新目录中的：
 
 ```text
-/root/fnvme/TEST_10.21/data_1_cata4_40nm_gaussian_fbp/
+/root/fnvme/TEST_10.21/data_1_cata4_40nm_gaussian_fbp_auto/
   vol_fbp_preview.nii.gz
   vol_train_fbp_gaussian.nii.gz
-  init_data_1_cata4_40nm_gaussian_fbp_preview.png
-  init_data_1_cata4_40nm_gaussian_fbp_slices.png
+  init_data_1_cata4_40nm_gaussian_fbp_auto_preview.png
+  init_data_1_cata4_40nm_gaussian_fbp_auto_slices.png
 ```
 
 确认初始化后继续：
@@ -38,7 +39,7 @@ bash scripts/run_cata4_gaussian_fbp.sh --start_from train
 
 ```bash
 --fbp_coordinate_mode gaussian \
---fbp_sVoxel 0.01344 0.01344 0.01344 \
+--fbp_sVoxel auto \
 --init_source train_fbp \
 --init_visualize_fbp_nii
 ```
