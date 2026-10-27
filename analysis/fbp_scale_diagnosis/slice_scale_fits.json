@@ -1,0 +1,354 @@
+[
+  {
+    "case": "cata1_2",
+    "planes": [
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.397630375912077,
+          1.1939329501599922
+        ],
+        "sample_shift_fullres_pixels": [
+          -2.610872336166037,
+          -0.2703496779542558
+        ],
+        "ncc_after_scale": 0.8786355712237229,
+        "ncc_translation_only": 0.46025811708394887,
+        "normal_ijk_axis": 0
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.3750868119421946,
+          1.194816347104993
+        ],
+        "sample_shift_fullres_pixels": [
+          0.25686623952266524,
+          -0.15177849792900522
+        ],
+        "ncc_after_scale": 0.8832608918609989,
+        "ncc_translation_only": 0.5113831395141487,
+        "normal_ijk_axis": 1
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.3967308682090447,
+          1.412892839204723
+        ],
+        "sample_shift_fullres_pixels": [
+          -0.10093578919668111,
+          -3.3792278821694577
+        ],
+        "ncc_after_scale": 0.8999194171179479,
+        "ncc_translation_only": 0.4300206600344671,
+        "normal_ijk_axis": 2
+      }
+    ]
+  },
+  {
+    "case": "cata1",
+    "planes": [
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          0.9895994659306412,
+          0.6055949147722703
+        ],
+        "sample_shift_fullres_pixels": [
+          0.17160545662996127,
+          -0.08071659161113184
+        ],
+        "ncc_after_scale": 0.9908910235662833,
+        "ncc_translation_only": 0.7715031110842425,
+        "normal_ijk_axis": 0
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.002461353795187,
+          0.6100192266919386
+        ],
+        "sample_shift_fullres_pixels": [
+          0.03532098280770226,
+          -0.11075079169717307
+        ],
+        "ncc_after_scale": 0.9967541853227554,
+        "ncc_translation_only": 0.7920310230420615,
+        "normal_ijk_axis": 1
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          0.994951231110641,
+          0.9914495438754864
+        ],
+        "sample_shift_fullres_pixels": [
+          -0.2193041927179544,
+          0.12474988444969468
+        ],
+        "ncc_after_scale": 0.995608702778889,
+        "ncc_translation_only": 0.9952164809795861,
+        "normal_ijk_axis": 2
+      }
+    ]
+  },
+  {
+    "case": "cata2_1",
+    "planes": [
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          0.792878590060338,
+          0.7291228685829658
+        ],
+        "sample_shift_fullres_pixels": [
+          18.051578278125433,
+          17.836740510563555
+        ],
+        "ncc_after_scale": 0.5732002834002533,
+        "ncc_translation_only": 0.542855582990357,
+        "normal_ijk_axis": 0
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          0.3,
+          0.3
+        ],
+        "sample_shift_fullres_pixels": [
+          32.290348048667234,
+          -29.604829188037204
+        ],
+        "ncc_after_scale": 0.21985075603550167,
+        "ncc_translation_only": 0.033987970042010825,
+        "normal_ijk_axis": 1
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          2.2759144488884524,
+          1.327560693050164
+        ],
+        "sample_shift_fullres_pixels": [
+          30.034997008602893,
+          -7.084291655064514
+        ],
+        "ncc_after_scale": 0.5185897564751222,
+        "ncc_translation_only": 0.4656721776139405,
+        "normal_ijk_axis": 2
+      }
+    ]
+  },
+  {
+    "case": "cata2_2",
+    "planes": [
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.2227650731298887,
+          0.9630729404562892
+        ],
+        "sample_shift_fullres_pixels": [
+          -1.3903330506063076,
+          0.8941042450459521
+        ],
+        "ncc_after_scale": 0.9402534465447132,
+        "ncc_translation_only": 0.5346041266926803,
+        "normal_ijk_axis": 0
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.2282078328558002,
+          0.9662968339594704
+        ],
+        "sample_shift_fullres_pixels": [
+          0.2638236451712298,
+          1.3556807832005566
+        ],
+        "ncc_after_scale": 0.9209535169841223,
+        "ncc_translation_only": 0.544520429175829,
+        "normal_ijk_axis": 1
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.2210041532649945,
+          1.2263068966688722
+        ],
+        "sample_shift_fullres_pixels": [
+          0.07377929698954233,
+          -1.7617269113945477
+        ],
+        "ncc_after_scale": 0.8776267752929813,
+        "ncc_translation_only": 0.3947703070377011,
+        "normal_ijk_axis": 2
+      }
+    ]
+  },
+  {
+    "case": "cata2_3",
+    "planes": [
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.2019687667591226,
+          0.8225181627740706
+        ],
+        "sample_shift_fullres_pixels": [
+          0.1337520500635123,
+          0.013324713298747256
+        ],
+        "ncc_after_scale": 0.9186302112565927,
+        "ncc_translation_only": 0.6173986068627632,
+        "normal_ijk_axis": 0
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.1984698596976826,
+          0.8197906435462076
+        ],
+        "sample_shift_fullres_pixels": [
+          -0.08734539495125283,
+          -0.10671053085440539
+        ],
+        "ncc_after_scale": 0.942112481345511,
+        "ncc_translation_only": 0.5154807793972785,
+        "normal_ijk_axis": 1
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.2014499382136976,
+          1.2018169131815113
+        ],
+        "sample_shift_fullres_pixels": [
+          -0.10552008782958065,
+          0.18029191008407167
+        ],
+        "ncc_after_scale": 0.904906585927831,
+        "ncc_translation_only": 0.49908623720324213,
+        "normal_ijk_axis": 2
+      }
+    ]
+  },
+  {
+    "case": "cata3_1",
+    "planes": [
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.6208844567699252,
+          1.023154426794851
+        ],
+        "sample_shift_fullres_pixels": [
+          1.0499424436054472,
+          0.010758745927885727
+        ],
+        "ncc_after_scale": 0.684669021829842,
+        "ncc_translation_only": 0.3510167929802112,
+        "normal_ijk_axis": 0
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.635532080818189,
+          1.0229164112071827
+        ],
+        "sample_shift_fullres_pixels": [
+          -0.7601289770927468,
+          0.13917088848995526
+        ],
+        "ncc_after_scale": 0.9806991564753047,
+        "ncc_translation_only": 0.7931544123149291,
+        "normal_ijk_axis": 1
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.6167341039096825,
+          1.6219705646811748
+        ],
+        "sample_shift_fullres_pixels": [
+          -0.7221499301108381,
+          1.135805957546241
+        ],
+        "ncc_after_scale": 0.7053065724649148,
+        "ncc_translation_only": 0.22869632275701987,
+        "normal_ijk_axis": 2
+      }
+    ]
+  },
+  {
+    "case": "cata3_2",
+    "planes": [
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.418333986243391,
+          1.0669670165059106
+        ],
+        "sample_shift_fullres_pixels": [
+          -0.7688632911616544,
+          -0.030710306322951908
+        ],
+        "ncc_after_scale": 0.8960147191513278,
+        "ncc_translation_only": 0.3983195997939729,
+        "normal_ijk_axis": 0
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.4162383667188667,
+          1.0672117733552882
+        ],
+        "sample_shift_fullres_pixels": [
+          -0.14844104443722195,
+          -0.0015536093413182073
+        ],
+        "ncc_after_scale": 0.8878930526971117,
+        "ncc_translation_only": 0.3171142058882029,
+        "normal_ijk_axis": 1
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.4145721763715768,
+          1.4183044399019589
+        ],
+        "sample_shift_fullres_pixels": [
+          -0.14844482977335313,
+          -0.8732194975924752
+        ],
+        "ncc_after_scale": 0.8612960325681249,
+        "ncc_translation_only": 0.33196051913716434,
+        "normal_ijk_axis": 2
+      }
+    ]
+  },
+  {
+    "case": "cata4",
+    "planes": [
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.8949691084589986,
+          1.2450784825077068
+        ],
+        "sample_shift_fullres_pixels": [
+          0.037681543271341766,
+          -1.243309523438767
+        ],
+        "ncc_after_scale": 0.6991370117856213,
+        "ncc_translation_only": 0.6372636903607504,
+        "normal_ijk_axis": 0
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.8416563865619846,
+          1.2099405945509065
+        ],
+        "sample_shift_fullres_pixels": [
+          0.0637740979517698,
+          -2.4637435176171474
+        ],
+        "ncc_after_scale": 0.8385038157009154,
+        "ncc_translation_only": 0.43509597353183316,
+        "normal_ijk_axis": 1
+      },
+      {
+        "fbp_to_gaussian_size_ratio_axes": [
+          1.804309109578766,
+          1.8153375575938187
+        ],
+        "sample_shift_fullres_pixels": [
+          -0.39033896800099566,
+          -1.1939684978791572
+        ],
+        "ncc_after_scale": 0.7960411887675419,
+        "ncc_translation_only": 0.516514683010378,
+        "normal_ijk_axis": 2
+      }
+    ]
+  }
+]

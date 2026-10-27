@@ -26,7 +26,8 @@ import run_pipeline as pipeline
 prepare = import_prepare()
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "964783a"
-OPTIONAL_MODULES = ("scripts.auto_svoxel", "scripts.gaussian_fbp", "scripts.fbp_geometry")
+OPTIONAL_MODULES = ("scripts.auto_svoxel", "scripts.gaussian_fbp", "scripts.fbp_geometry",
+                    "scripts.stripe_correction", "tomopy")
 
 
 def reference(filename):

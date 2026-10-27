@@ -157,10 +157,16 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images, f
             )
         geometry_args = argparse.Namespace(**vars(args))
         geometry_args.pixel_subsample = recon_subsample
-        reconstruction_input = np.stack(
-            [process_projection(image, geometry_args, flat=flat_field) for image in raw_images],
-            axis=0,
-        )
+        if getattr(args, "stripe_correction", None) is not None:
+            from scripts.stripe_correction import finish_projections
+            # In the opt-in path these are corrected native-resolution line
+            # integrals, not raw TIFFs. Never refit stripes on sparse views.
+            reconstruction_input = finish_projections(raw_images, geometry_args)
+        else:
+            reconstruction_input = np.stack(
+                [process_projection(image, geometry_args, flat=flat_field) for image in raw_images],
+                axis=0,
+            )
         print(
             f"Reconstruction detector {recon_subsample}x subsampled: "
             f"{tuple(reconstruction_input.shape[1:])}",
@@ -173,6 +179,8 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images, f
 
 def main(args):
     gaussian_mode = getattr(args, "coordinate_mode", None) == "gaussian"
+    stripe_enabled = getattr(args, "stripe_correction", None) is not None
+    stripe_info = None
     if gaussian_mode and args.mode != "parallel":
         raise ValueError("--coordinate_mode gaussian requires --mode parallel")
     svoxel_resolution = None
@@ -213,6 +221,11 @@ def main(args):
     if args.center_json is not None:
         with args.center_json.open("r", encoding="utf-8") as handle:
             center_result = json.load(handle)
+        if stripe_enabled:
+            from scripts.stripe_correction import normalize_options
+            center_stripe = center_result.get("stripe_correction", {})
+            if center_stripe.get("parameters") != normalize_options(args.stripe_correction):
+                raise ValueError("Center JSON stripe settings do not match; recompute the center with the same correction")
         if "center_valid" in center_result and not center_result["center_valid"]:
             raise ValueError(
                 f"Center/axis result is marked invalid: {args.center_json}. "
@@ -235,7 +248,17 @@ def main(args):
     # --recon_pixel_subsample needs the raw TIFFs again, so keep them only when
     # that option is actually used.
     full_resolution = None
-    if args.recon_pixel_subsample is not None and not gaussian_mode:
+    if stripe_enabled:
+        from scripts.stripe_correction import prepare_projections
+        native_angles = build_angles(args, len(paths), preserve_duplicate_endpoint=True)
+        projections_all, native_integrals, stripe_info = prepare_projections(
+            (tifffile.imread(path) for path in paths), args, flat=flat_field,
+            angles=native_angles, preview_dir=args.output_dir,
+        )
+        if args.recon_pixel_subsample is not None and not gaussian_mode:
+            full_resolution = native_integrals
+        del native_integrals
+    elif args.recon_pixel_subsample is not None and not gaussian_mode:
         full_resolution = [tifffile.imread(path) for path in paths]
         projections_all = np.stack(
             [process_projection(image, args, flat=flat_field) for image in full_resolution], axis=0
@@ -287,6 +310,7 @@ def main(args):
                     "angles_all": [float(x) for x in angles_all],
                     "angles_unique": [float(x) for x in angles],
                     "removed_duplicate_endpoint": bool(removed_endpoint),
+                    **({"stripe_correction": stripe_info} if stripe_info is not None else {}),
                 },
                 handle,
                 indent=2,
@@ -418,6 +442,7 @@ def main(args):
         "proj_train": train_records,
         "proj_test": test_records,
         "source": {
+            **({"stripe_correction": stripe_info} if stripe_info is not None else {}),
             **({"sVoxel_resolution": svoxel_resolution} if svoxel_resolution else {}),
             "input_dir": str(args.input_dir.resolve()),
             "algorithm": (
@@ -483,6 +508,11 @@ def preview_size(args):
 
 def build_parser():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--stripe_correction", nargs="?", const={}, type=json.loads,
+                        default=argparse.SUPPRESS,
+                        help="Opt in with a JSON object (or no value for defaults); null disables it.")
+    parser.add_argument("--stripe_ncore", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--stripe_row_chunk", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--input_dir", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--config", default=None)

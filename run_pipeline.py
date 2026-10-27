@@ -263,6 +263,12 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         argument_default=argparse.SUPPRESS,
     )
+    _add(parser, "--stripe_correction", "--fbp_stripe_correction", dest="stripe_correction",
+         nargs="?", const={}, type=json.loads,
+         help="Opt-in TomoPy remove_all_stripe JSON object; null disables correction.")
+    _add(parser, "--no-stripe_correction", dest="stripe_correction", action="store_const", const=None)
+    _add(parser, "--stripe_ncore", dest="stripe_ncore", type=int)
+    _add(parser, "--stripe_row_chunk", dest="stripe_row_chunk", type=int)
 
     _add(parser, "--input_dir", dest="input_dir", type=Path, help="原始 TIFF 投影目录")
     _add(parser, "--output_dir", dest="output_dir", type=Path, help="FBP 数据集输出目录")
@@ -511,10 +517,16 @@ def flatten_config(data: dict[str, Any], legacy_train: bool = False) -> dict[str
     for section, values in data.items():
         if legacy_train and section == "inherit_from":
             continue
+        if not legacy_train and section == "stripe_correction":
+            result["stripe_correction"] = values
+            continue
         if isinstance(values, dict):
             section_name = "train" if legacy_train else str(section)
             for key, value in values.items():
-                result[_config_key(section_name, str(key))] = value
+                if not legacy_train and section_name == "fbp" and key == "stripe_correction":
+                    result["stripe_correction"] = value
+                else:
+                    result[_config_key(section_name, str(key))] = value
         else:
             section_name = None
             result[_config_key(section_name, str(section))] = values
@@ -531,7 +543,8 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
     values = dict(DEFAULTS)
 
     def merge_loaded(loaded: dict[str, Any], source: Path) -> None:
-        unknown = sorted(set(loaded) - set(DEFAULTS) - {"fbp_coordinate_mode"})
+        unknown = sorted(set(loaded) - set(DEFAULTS) - {
+            "fbp_coordinate_mode", "stripe_correction", "stripe_ncore", "stripe_row_chunk"})
         if unknown:
             raise ValueError(f"Unknown keys in {source}: {', '.join(unknown)}")
         values.update(loaded)
@@ -545,6 +558,13 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
         pipeline_config = Path(pipeline_config).resolve()
         merge_loaded(load_yaml(pipeline_config), pipeline_config)
     values.update(vars(parsed))
+    if values.get("stripe_correction") is not None:
+        from scripts.stripe_correction import normalize_options
+        values["stripe_correction"] = normalize_options(values["stripe_correction"])
+    else:
+        values.pop("stripe_correction", None)
+        if "stripe_ncore" in values or "stripe_row_chunk" in values:
+            raise ValueError("stripe_ncore/stripe_row_chunk require stripe_correction")
     if values["fbp_sVoxel"] == "auto" or values["fbp_sVoxel"] == ["auto"]:
         values["fbp_sVoxel"] = "auto"
     elif isinstance(values["fbp_sVoxel"], str):
@@ -636,6 +656,10 @@ def add_bool(command: list[str], flag: str, value: Any) -> None:
 
 def build_center_command(args: argparse.Namespace) -> list[str]:
     command = [sys.executable, str(ROOT / "scripts" / "scan_fbp_center_tomopy.py")]
+    if getattr(args, "stripe_correction", None) is not None:
+        add_option(command, "--stripe_correction", json.dumps(args.stripe_correction))
+        add_option(command, "--stripe_ncore", getattr(args, "stripe_ncore", None))
+        add_option(command, "--stripe_row_chunk", getattr(args, "stripe_row_chunk", None))
     if args.center_processed_npy is not None:
         add_option(command, "--processed_npy", args.center_processed_npy)
         add_option(command, "--angles_npy", args.center_angles_npy)
@@ -675,6 +699,10 @@ def build_center_command(args: argparse.Namespace) -> list[str]:
 
 def build_fbp_command(args: argparse.Namespace, center_json: Path | None, manual_offset: list[float] | None) -> list[str]:
     command = [sys.executable, str(ROOT / "prepare_fbp_tiff.py"), "--input_dir", str(args.input_dir), "--output_dir", str(args.output_dir)]
+    if getattr(args, "stripe_correction", None) is not None:
+        add_option(command, "--stripe_correction", json.dumps(args.stripe_correction))
+        add_option(command, "--stripe_ncore", getattr(args, "stripe_ncore", None))
+        add_option(command, "--stripe_row_chunk", getattr(args, "stripe_row_chunk", None))
     mapping = (
         ("fbp_projection_glob", "--projection_glob"), ("fbp_flat_glob", "--flat_glob"),
         ("fbp_dark_value", "--dark_value"), ("fbp_flat_eps", "--flat_eps"),
@@ -714,6 +742,8 @@ def build_fbp_command(args: argparse.Namespace, center_json: Path | None, manual
 
 def build_init_command(args: argparse.Namespace, init_output: Path) -> list[str]:
     command = [sys.executable, str(ROOT / "init_from_fbp.py")]
+    if args.init_source == "train_fbp" and getattr(args, "stripe_correction", None) is not None:
+        add_option(command, "--stripe_correction", json.dumps(args.stripe_correction))
     if getattr(args, "fbp_coordinate_mode", None) == "gaussian":
         add_option(command, "--coordinate_mode", "gaussian")
     if args.init_source == "full_fbp":
@@ -844,6 +874,11 @@ def build_test_command(args: argparse.Namespace, pose_result: Path | None) -> li
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    if getattr(args, "stripe_correction", None) is not None:
+        for name in ("stripe_ncore", "stripe_row_chunk"):
+            value = getattr(args, name, 1)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
     missing = [name for name in ("input_dir", "output_dir", "model_path") if getattr(args, name) is None]
     if missing:
         raise ValueError("Missing required arguments: " + ", ".join("--" + name for name in missing))
@@ -953,6 +988,14 @@ def main(args: argparse.Namespace) -> None:
             previous = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             previous = {}
+        if previous.get("resolved_arguments", {}).get("stripe_correction") != getattr(args, "stripe_correction", None):
+            raise ValueError("Stripe correction changed since the previous run; use a new output directory without --resume")
+    if getattr(args, "stripe_correction", None) is not None and not args.dry_run and (
+        args.skip_fbp or not stage_in_window(args, "fbp")
+        or (args.resume and previous.get("stage_status", {}).get("fbp") == "success")
+    ):
+        from scripts.stripe_correction import dataset_metadata
+        dataset_metadata(args.output_dir, args.stripe_correction)
     def save() -> None:
         manifest["resolved_arguments"] = vars(args)
         write_manifest(manifest_path, manifest)

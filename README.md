@@ -28,6 +28,28 @@ r2_gaussian/                       R2-Gaussian 核心实现
 
 建议使用已有的 CUDA/PyTorch 环境，再安装 `requirements.txt` 中的 Python 依赖。TIGRE、SimpleITK 和 TomoPy 需要在当前环境中可导入；如果已有旋转中心 JSON，可以跳过 TomoPy 中心扫描。
 
+### 可选 TomoPy 条纹校正
+
+条纹校正默认关闭；不配置 `stripe_correction` 时，预处理保持原流程。显式配置后，管线会在原始探测器分辨率、空间降采样之前，对完整投影堆栈调用 `tomopy.remove_all_stripe`，并把同一份结果用于中心估计、FBP、训练投影和测试投影：
+
+```yaml
+stripe_correction:
+  snr: 3.0
+  la_size: 61
+  sm_size: 21
+  dim: 1
+```
+
+也可以在命令行传入 JSON：
+
+```bash
+python run_pipeline.py ... \
+  --stripe_correction '{"snr":3.0,"la_size":61,"sm_size":21,"dim":1}'
+```
+
+开启后，FBP 输出目录会保存 `stripe_sinogram_before.png` 和
+`stripe_sinogram_after.png`。两张图使用中间探测器行、相同的灰度范围，便于直接比较校正前后的正弦图。`preprocess_meta.json`、`meta_data.json` 和中心 JSON 会记录算法、参数、TomoPy 版本及预览文件。
+
 ## 单管线运行
 
 使用已有中心结果：

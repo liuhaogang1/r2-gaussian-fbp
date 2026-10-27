@@ -70,6 +70,8 @@ def load_train_volume(args, reconstruct_train, expected_shape):
             for path in [dataset / str(record["file_path"]).replace("\\", "/")]
         ],
     }
+    if getattr(args, "stripe_correction", None) is not None:
+        signature["stripe_correction"] = metadata["source"]["stripe_correction"]
     sidecar = output.with_suffix(".geometry.json")
     cached = None
     if sidecar.exists():

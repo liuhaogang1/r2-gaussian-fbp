@@ -12,6 +12,7 @@
 import os
 import os.path as osp
 import csv
+import json
 import torch
 from random import randint
 import sys
@@ -494,6 +495,22 @@ def training(
 
     if pose_model is not None:
         save_pose_result(scene, pose_model)
+
+    final_num_gaussians = int(gaussians.get_xyz.shape[0])
+    summary_path = osp.join(scene.model_path, "training_summary.json")
+    with open(summary_path, "w", encoding="utf-8") as summary_file:
+        json.dump(
+            {
+                "iteration": opt.iterations,
+                "num_gaussians": final_num_gaussians,
+                "max_num_gaussians": opt.max_num_gaussians,
+            },
+            summary_file,
+            indent=2,
+        )
+        summary_file.write("\n")
+    print(f"Final Gaussian count: {final_num_gaussians:,}")
+    print(f"Training summary saved to: {summary_path}")
 
 
 def training_report(

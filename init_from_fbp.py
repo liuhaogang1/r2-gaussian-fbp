@@ -78,6 +78,11 @@ def load_initial_volume(args: argparse.Namespace) -> tuple[np.ndarray, Path]:
             raise ValueError("--dataset is required when --use_train_fbp is set")
         if args.volume is not None:
             raise ValueError("Do not combine --volume with --use_train_fbp")
+        if getattr(args, "stripe_correction", None) is not None:
+            from scripts.stripe_correction import dataset_metadata, load_train_volume
+            dataset_metadata(args.dataset, args.stripe_correction)
+            if getattr(args, "coordinate_mode", None) != "gaussian":
+                return load_train_volume(args, reconstruct_from_train_views, dataset_shape_from_metadata)
         if getattr(args, "coordinate_mode", None) == "gaussian":
             from scripts.gaussian_fbp import load_train_volume
             return load_train_volume(args, reconstruct_from_train_views, dataset_shape_from_metadata)
@@ -278,6 +283,9 @@ def visualize_initial_point_cloud(
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--stripe_correction", nargs="?", const={}, type=json.loads,
+                        default=argparse.SUPPRESS,
+                        help="Validate existing corrected data and its train-FBP cache; does not correct again.")
     parser.add_argument(
         "--volume",
         type=Path,

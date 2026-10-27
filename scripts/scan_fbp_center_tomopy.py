@@ -23,6 +23,11 @@ from scripts.fbp_preprocess import (
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--stripe_correction", nargs="?", const={}, type=json.loads,
+                        default=argparse.SUPPRESS,
+                        help="Correct the full native-resolution stack before extracting center slices.")
+    parser.add_argument("--stripe_ncore", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--stripe_row_chunk", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--input_dir", type=Path, default=None)
     parser.add_argument("--projection_glob", default=None)
     parser.add_argument("--flat_glob", default=None)
@@ -258,6 +263,8 @@ def find_center_by_endpoint_pair(endpoint_pair, rows, args):
 
 def main(args):
     threads = configure_threads(args.threads)
+    stripe_info = None
+    stripe_enabled = getattr(args, "stripe_correction", None) is not None
     tomopy = None
     if args.method in {"vo", "scipy"}:
         try:
@@ -272,6 +279,13 @@ def main(args):
 
     endpoint_pair = None
     if args.processed_npy is not None:
+        if stripe_enabled:
+            from scripts.stripe_correction import processed_metadata
+            stripe_info = processed_metadata(args.processed_npy, args.stripe_correction)
+            if args.endpoint_pair_npy is not None and (
+                args.endpoint_pair_npy.resolve() != args.processed_npy.resolve().parent / "proj_endpoint_pair.npy"
+            ):
+                raise ValueError("Corrected processed inputs must use the endpoint pair from the same preprocessing directory")
         processed_all = np.asarray(np.load(args.processed_npy), dtype=np.float32)
         if processed_all.ndim != 3:
             raise ValueError(
@@ -310,10 +324,21 @@ def main(args):
             )
             flat_field = load_flat_field(flat_paths, args.dark_value)
 
-        raw = [tifffile.imread(path) for path in paths]
-        processed_all = np.stack(
-            [process_projection(image, args, flat=flat_field) for image in raw], axis=0
-        )
+        if stripe_enabled:
+            if args.endpoint_pair_npy is not None:
+                raise ValueError("With stripe correction, extract the endpoint pair from the corrected full TIFF stack")
+            from scripts.stripe_correction import prepare_projections
+            native_angles = build_angles(args, len(paths), preserve_duplicate_endpoint=True)
+            processed_all, native_integrals, stripe_info = prepare_projections(
+                (tifffile.imread(path) for path in paths), args, flat=flat_field,
+                angles=native_angles, preview_dir=args.output.parent,
+            )
+            del native_integrals
+        else:
+            raw = [tifffile.imread(path) for path in paths]
+            processed_all = np.stack(
+                [process_projection(image, args, flat=flat_field) for image in raw], axis=0
+            )
         angles = build_angles(args, len(processed_all))
         if args.endpoint_pair_npy is not None:
             endpoint_pair = np.asarray(np.load(args.endpoint_pair_npy), dtype=np.float32)
@@ -424,6 +449,7 @@ def main(args):
                     {"offset_px": float(offset), "center_px": float(center_reference + offset), "pair_score": float(score), "stage": "fine"}
                 )
         result = {
+            **({"stripe_correction": stripe_info} if stripe_info is not None else {}),
             "offDetector": [float(offset_u), 0.0],
             "center_px": float(center_px),
             "center_reference_px": float(center_reference),
@@ -566,6 +592,7 @@ def main(args):
             )
 
     result = {
+        **({"stripe_correction": stripe_info} if stripe_info is not None else {}),
         "offDetector": [float(offset_u), 0.0],
         "center_px": center_px,
         "median_center_px": median_center_px,
