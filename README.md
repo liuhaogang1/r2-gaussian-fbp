@@ -104,22 +104,9 @@ PyTorch/CUDA 环境中运行 `scripts/build_pose_rasterizer.ps1`；默认流程�
 
 ## 自动计算重建视野 sVoxel
 
-两个新功能均为显式选择，默认关闭，功能实现分别在
-`scripts/auto_svoxel.py` 和 `scripts/gaussian_fbp.py`（几何辅助函数在
-`scripts/fbp_geometry.py`）。主流程只保留参数判断和调用入口。
-不传新选项、继续使用原来的三个数值时，保留两次修改前（`964783a`）的
-重建几何、降采样、预览单位、初始化坐标、缓存规则和命令生成逻辑。
-
-| 管线参数 | 自动计算 sVoxel | Gaussian 坐标适配 |
-| --- | --- | --- |
-| 原有命令，sVoxel 为三个数值或不传 | 关闭 | 关闭，沿用原流程 |
-| `--fbp_sVoxel auto` | 开启 | 关闭 |
-| `--fbp_coordinate_mode gaussian`，sVoxel 为三个数值 | 关闭 | 开启 |
-| `--fbp_sVoxel auto --fbp_coordinate_mode gaussian` | 开启 | 开启 |
-
-显式写 `--fbp_coordinate_mode physical` 也沿用原流程。配置文件中明确设置
-`fbp.coordinate_mode: gaussian` 或 `fbp.sVoxel: auto` 等同于显式传参。
-已有数据集的 `reconstruction.coordinate_mode` 不会自动启用任何功能。
+`--fbp_sVoxel auto` 显式启用逐数据视野计算，实现位于
+`scripts/auto_svoxel.py`；数值形式的 `--fbp_sVoxel X Y Z` 仍然有效。
+FBP 始终使用实际探测器几何，Gaussian 平行投影默认采用相同的物理视野。
 
 管线支持 `--fbp_sVoxel auto`（别名 `--sVoxel auto`），单独预处理支持
 `python prepare_fbp_tiff.py ... --sVoxel auto`。原有三个数值的写法仍有效；
@@ -149,50 +136,45 @@ source.sVoxel_resolution 及 pipeline_manifest.json 的 resolved_arguments 中�
 从 train 等后续阶段继续时，auto 优先沿用现有数据集的 scanner.sVoxel，
 避免重新推算已存在体数据的坐标；即使原始 TIFF 已移动也可继续。
 
-auto 与下方 coordinate_mode 是两个独立选择。仅修正逐数据 FOV，可使用
-`--fbp_sVoxel auto`；要让 FBP 兼容现有
-Gaussian 的投影坐标，可使用 `--fbp_sVoxel auto --fbp_coordinate_mode gaussian`。
+## Gaussian 物理平行投影
 
-## FBP 与现有 Gaussian 视野一致
+已删除虚拟探测器兼容模式及 `--fbp_coordinate_mode` / `--coordinate_mode` 参数，
+旧 YAML 中的 `fbp.coordinate_mode` 也不再接受。无需额外参数启用物理投影。
 
-若要保留现有平行束 Gaussian 的重建尺度，让完整 FBP 和初始化匹配它，
-在管线命令中添加 `--fbp_coordinate_mode gaussian`。不传该参数时保留原来的
-物理探测器几何。新模式仅改变解析重建使用的虚拟探测器视野：两个方向
-均使用 `max(sVoxel)`，与现有 Gaussian 的单位平行投影矩阵一致。
-训练投影、原始 scanner 元数据、Gaussian 渲染器和位姿配置保留原值。
-这是坐标兼容方案，不代表 Gaussian 外观尺度已经完成绝对物理标定。
+令 `scene_scale = 2/max(sVoxel)`。Gaussian 使用归一化后的真实
+`scanner.sDetector=[V,U]` 构造投影矩阵，其 U/V 对角项分别为
+`2/sDetector[1]`、`2/sDetector[0]`。两个 CUDA 后端的协方差输入
+`tanfovx/tanfovy` 对应探测器 U/V 半宽，因此中心位置和投影宽度使用同一像素间距。
+位姿分支沿用相同比例，学习的 detector shift 仍以像素为单位。
+锥束的透视投影公式保持原样。
 
-旧示例曾固定 cata1 的参考边长 `0.01344 mm`；该数值不应作为所有数据的
-物理视野。现在示例使用 auto 为当前数据计算。Cata4 完整命令保存在
-`scripts/run_cata4_gaussian_fbp.sh`，在服务器仓库根目录执行：
+初始化默认按照实际 `sVoxel` 和 `offOrigin` 映射体素中心，支持非立方体
+和非零原点；无 scanner 元数据的独立体仍按中心单位立方体处理。FBP 预览
+保留原输入长度单位；常规测试体仍按现有流程导出归一化单位，叠加前应换算。
 
-```bash
-bash scripts/run_cata4_gaussian_fbp.sh --stop_after init
-```
+已有物理 FBP 数据集可以继续使用，但需要在新模型目录重新训练。旧投影
+约定训练得到的 checkpoint/点云不能直接用于验证新几何。旧兼容数据集若记录
+`reconstruction.coordinate_mode: gaussian`，数据读取和初始化会明确拒绝；
+请从投影重新生成物理 FBP 和初始化，不要删除元数据标签后复用旧体。
 
-该命令使用新的数据集和模型目录，先运行中心估计、完整 FBP 和初始化，
-生成 `vol_train_fbp_gaussian.nii.gz`（同 test.py 的归一化 spacing）及点云预览。
-检查后执行 `bash scripts/run_cata4_gaussian_fbp.sh --start_from train` 完成训练与测试。
-首次运行时也可以不加阶段参数，直接执行完整流程。
-
-仅显式开启 Gaussian 模式时，`train_fbp` 使用独立的
-`vol_train_fbp_gaussian.npy` 缓存，并核对几何、角度和投影文件状态；
-该模式的缓存缺少几何签名时会重算。管线会把开启参数同时传给 FBP 和初始化，
-单独运行初始化脚本则必须显式传 `--coordinate_mode gaussian`。
-不传时仍按原规则复用 `vol_train_fbp.npy`，不新增签名校验；
-非立方体和 offOrigin 的点坐标修正、归一化 NIfTI 间距也仅在 Gaussian 模式启用。
-切换模式时不要用 `--resume` 跳过旧 FBP/init。
-旧物理 FBP 已裁掉的区域无法靠点云缩放恢复，应从投影重新反投影。
-
-单独使用已有训练投影生成兼容初始化时：
+Cata4 的物理几何示例使用新的数据和模型目录：
 
 ```bash
-python init_from_fbp.py --dataset /path/to/dataset --use_train_fbp \
-  --coordinate_mode gaussian --visualize_fbp_nii --visualize --visualize_slices
+bash scripts/run_cata4_physical.sh --stop_after init
+bash scripts/run_cata4_physical.sh --start_from train
 ```
 
-该命令不修改已有数据集的参考 `vol_fbp.npy` 或元数据；完整对比实验建议
-使用新的管线输出目录。
+CPU 回归测试包括实际矩形尺寸、偏心点、球体投影半径、位姿像素偏移和
+非立方体初始化。服务器上可额外验证实际 CUDA 渲染和反向传播：
+
+```bash
+python scripts/validate_physical_projection.py
+python scripts/validate_physical_projection.py --pose
+```
+
+第二条需要已安装本项目的可微位姿 CUDA 扩展。脚本不启动训练，使用解析
+高斯线积分校验实际渲染的中心、宽度和强度，并检查位姿平移梯度。此次
+修正没有改动 CUDA 源码，已有扩展不需因这次 Python 参数修正而重编译。
 
 ## 分阶段运行
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Run from the repository root after uploading the updated Python files.
+# Physical FBP and Gaussian projection. Run from the repository root.
 set -euo pipefail
 
 CUDA_VISIBLE_DEVICES=0 \
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 python -u run_pipeline.py \
   --input_dir /root/fnvme/data_10_8/1/Cata4_8.4keV_500ms \
-  --output_dir /root/fnvme/TEST_10.21/data_1_cata4_40nm_gaussian_fbp_auto \
-  --model_path /root/fnvme/TEST_10.21/models/data_1_cata4_40nm_gaussian_fbp_auto \
+  --output_dir /root/fnvme/TEST_10.27/data_1_cata4_40nm_physical \
+  --model_path /root/fnvme/TEST_10.27/models/data_1_cata4_40nm_physical \
   --config /root/fnvme/data_10_8/1/Cata4_8.4keV_500ms/config.txt \
   --projection_glob "Tomo_*.tiff" \
   --flat_glob "Flat_*.tiff" \
@@ -17,7 +17,6 @@ python -u run_pipeline.py \
   --fbp_input_type transmission \
   --fbp_log_eps 1e-6 \
   --fbp_mode parallel \
-  --fbp_coordinate_mode gaussian \
   --fbp_shift_v 0 \
   --fbp_pixel_subsample 1 \
   --fbp_recon_pixel_subsample 1 \
@@ -33,7 +32,7 @@ python -u run_pipeline.py \
   --fbp_filter hann \
   --center_method pair \
   --center_pixel_size 0.00004 \
-  --center_output /root/fnvme/TEST_10.21/data_1_cata4_40nm_gaussian_fbp_auto_center.json \
+  --center_output /root/fnvme/TEST_10.27/data_1_cata4_40nm_physical_center.json \
   --fbp_n_train 360 \
   --fbp_n_test 0 \
   --init_source train_fbp \

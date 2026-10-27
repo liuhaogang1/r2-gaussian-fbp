@@ -370,7 +370,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_bool(parser, "--fbp_keep_duplicate_endpoint", "fbp_keep_duplicate_endpoint")
     _add(parser, "--keep_duplicate_endpoint", dest="fbp_keep_duplicate_endpoint", action="store_true")
     fbp_flag("mode", "--mode", choices=["parallel", "cone"])
-    fbp_flag("coordinate_mode", choices=["physical", "gaussian"])
     fbp_flag("input_type", "--input_type", choices=["transmission", "intensity", "line_integral"])
     fbp_flag("i0", "--i0", type=float)
     fbp_flag("i0_mode", "--i0_mode", choices=["percentile", "free_ray", "fixed"])
@@ -544,7 +543,7 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
 
     def merge_loaded(loaded: dict[str, Any], source: Path) -> None:
         unknown = sorted(set(loaded) - set(DEFAULTS) - {
-            "fbp_coordinate_mode", "stripe_correction", "stripe_ncore", "stripe_row_chunk"})
+            "stripe_correction", "stripe_ncore", "stripe_row_chunk"})
         if unknown:
             raise ValueError(f"Unknown keys in {source}: {', '.join(unknown)}")
         values.update(loaded)
@@ -610,10 +609,7 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
         elif values.get("init_source") == "train_fbp":
             output = Path(values["output_dir"])
             values["train_slice_reference_path"] = (
-                values.get("init_fbp_output") or output / (
-                    "vol_train_fbp_gaussian.npy" if values.get("fbp_coordinate_mode") == "gaussian"
-                    else "vol_train_fbp.npy"
-                )
+                values.get("init_fbp_output") or output / "vol_train_fbp.npy"
             )
         else:
             values["train_slice_reference_path"] = Path(values["output_dir"]) / "vol_fbp.npy"
@@ -727,8 +723,6 @@ def build_fbp_command(args: argparse.Namespace, center_json: Path | None, manual
             value = "auto"
         add_option(command, flag, value)
     add_option(command, "--seed", args.seed)
-    if getattr(args, "fbp_coordinate_mode", None) == "gaussian":
-        add_option(command, "--coordinate_mode", "gaussian")
     add_option(command, "--free_ray", args.fbp_free_ray)
     add_bool(command, "--flat_field", args.fbp_flat_field)
     add_bool(command, "--preprocess_only", args.fbp_preprocess_only)
@@ -744,8 +738,6 @@ def build_init_command(args: argparse.Namespace, init_output: Path) -> list[str]
     command = [sys.executable, str(ROOT / "init_from_fbp.py")]
     if args.init_source == "train_fbp" and getattr(args, "stripe_correction", None) is not None:
         add_option(command, "--stripe_correction", json.dumps(args.stripe_correction))
-    if getattr(args, "fbp_coordinate_mode", None) == "gaussian":
-        add_option(command, "--coordinate_mode", "gaussian")
     if args.init_source == "full_fbp":
         add_option(command, "--volume", args.output_dir / "vol_fbp.npy")
     elif args.init_source == "train_fbp":
@@ -896,8 +888,6 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("center_search_min_px must be smaller than center_search_max_px")
     if args.center_pair_min_offset_px >= args.center_pair_max_offset_px:
         raise ValueError("center_pair_min_offset_px must be smaller than center_pair_max_offset_px")
-    if getattr(args, "fbp_coordinate_mode", None) == "gaussian" and args.fbp_mode != "parallel":
-        raise ValueError("fbp_coordinate_mode=gaussian requires fbp_mode=parallel")
     if any(int(value) <= 0 for value in args.fbp_nVoxel) or (args.fbp_sVoxel != "auto" and any(float(value) <= 0 for value in args.fbp_sVoxel)):
         raise ValueError("fbp_nVoxel and fbp_sVoxel must contain positive values")
     if args.fbp_n_train < 1 or args.fbp_n_test < 0:

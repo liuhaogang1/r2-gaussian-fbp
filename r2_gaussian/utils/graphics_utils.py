@@ -14,6 +14,7 @@ import math
 import numpy as np
 from typing import NamedTuple
 from plyfile import PlyData, PlyElement
+from r2_gaussian.utils.geometry_utils import parallel_projection_matrix
 
 
 class BasicPointCloud(NamedTuple):
@@ -94,27 +95,7 @@ def getWorld2View2(R, t, translate=np.array([0.0, 0.0, 0.0]), scale=1.0):
 
 def getProjectionMatrix(fovX, fovY, mode, scanner_cfg):
     if mode == 0:  # Parallel beam
-        # sVoxel = scanner_cfg["sVoxel"][0]  # Assume cube only!
-        # sVoxel_half = sVoxel / 2
-        # DSO = scanner_cfg["DSO"]
-        # near = DSO - sVoxel_half
-        # far = DSO + sVoxel_half
-        # top = sVoxel_half
-        # bottom = -sVoxel_half
-        # right = sVoxel_half
-        # left = -sVoxel_half
-        # P = torch.zeros(4, 4)
-        # z_sign = 1.0
-        # P[0, 0] = 2.0 / (right - left)
-        # P[0, 3] = -(right + left) / (right - left)
-        # P[1, 1] = 2.0 / (top - bottom)
-        # P[1, 3] = -(top + bottom) / (top - bottom)
-        # P[2, 2] = z_sign * 2.0 / (far - near)
-        # P[2, 3] = -(far + near) / (far - near)
-        # P[3, 3] = z_sign
-
-        # Projection matrix is eye
-        P = torch.eye(4)
+        P = torch.as_tensor(parallel_projection_matrix(scanner_cfg))
     elif mode == 1:
         znear = 0.01
         zfar = 100.0
@@ -152,7 +133,9 @@ def getParallelProjectionMatrix(detector_shift, scanner_cfg, device="cuda"):
     are constructed).  The sign convention is the same as the rasterizer's
     normalized detector coordinates.
     """
-    p = torch.eye(4, dtype=torch.float32, device=device)
+    p = torch.as_tensor(
+        parallel_projection_matrix(scanner_cfg), dtype=torch.float32, device=device
+    )
     shift_u = detector_shift[0]
     shift_v = detector_shift[1]
     detector_u = torch.as_tensor(

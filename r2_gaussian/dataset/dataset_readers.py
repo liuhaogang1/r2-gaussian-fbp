@@ -6,6 +6,7 @@ import os.path as osp
 import json
 import torch
 import pickle
+from r2_gaussian.utils.geometry_utils import validate_physical_dataset
 
 sys.path.append("./")
 from r2_gaussian.utils.graphics_utils import BasicPointCloud, fetchPly
@@ -46,6 +47,7 @@ def readBlenderInfo(path, eval):
     meta_data_path = osp.join(path, "meta_data.json")
     with open(meta_data_path, "r") as handle:
         meta_data = json.load(handle)
+    validate_physical_dataset(meta_data)
     meta_data["vol"] = osp.join(path, meta_data["vol"])
 
     if not "dVoxel" in meta_data["scanner"]:

@@ -12,6 +12,7 @@ import sys
 import torch
 import math
 from pathlib import Path
+from r2_gaussian.utils.geometry_utils import parallel_detector_half_extents
 
 
 def _load_raster_backend(pose_enabled):
@@ -221,12 +222,16 @@ def render(
     # Set up rasterization configuration
     mode = viewpoint_camera.mode
     if mode == 0:
+        # The CUDA covariance Jacobian uses width/(2*tanfovx) and
+        # height/(2*tanfovy). For parallel beams these inputs are the actual
+        # scene-normalized detector half extents, rather than angular tangents.
+        half_u, half_v = parallel_detector_half_extents(viewpoint_camera.scanner_cfg)
         if getattr(pipe, "pose_enabled", False):
-            tanfovx = torch.tensor([1.0], device=pc.get_xyz.device)
-            tanfovy = torch.tensor([1.0], device=pc.get_xyz.device)
+            tanfovx = torch.tensor([half_u], dtype=torch.float32, device=pc.get_xyz.device)
+            tanfovy = torch.tensor([half_v], dtype=torch.float32, device=pc.get_xyz.device)
         else:
-            tanfovx = 1.0
-            tanfovy = 1.0
+            tanfovx = half_u
+            tanfovy = half_v
     elif mode == 1:
         if getattr(pipe, "pose_enabled", False):
             tanfovx = torch.tan(

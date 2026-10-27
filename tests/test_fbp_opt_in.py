@@ -26,8 +26,7 @@ import run_pipeline as pipeline
 prepare = import_prepare()
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "964783a"
-OPTIONAL_MODULES = ("scripts.auto_svoxel", "scripts.gaussian_fbp", "scripts.fbp_geometry",
-                    "scripts.stripe_correction", "tomopy")
+OPTIONAL_MODULES = ("scripts.auto_svoxel", "scripts.stripe_correction", "tomopy")
 
 
 def reference(filename):
@@ -149,26 +148,22 @@ class OptInRegressionTests(unittest.TestCase):
                         np.testing.assert_equal(old_call[2][key], new_call[2][key])
                 np.testing.assert_array_equal(old[3], new[3])
 
-    def test_metadata_cannot_enable_gaussian_cache_or_signature_checks(self):
-        cfg = {"scanner": {"nVoxel": [4, 6, 8]},
-               "reconstruction": {"coordinate_mode": "gaussian"}}
-        (self.root / "meta_data.json").write_text(json.dumps(cfg))
-        expected = np.arange(192, dtype=np.float32).reshape(4, 6, 8)
-        np.save(self.root / "vol_train_fbp.npy", expected)
+    def test_removed_virtual_dataset_is_rejected_before_cache_reuse(self):
+        (self.root / "meta_data.json").write_text(json.dumps({
+            "scanner": {"nVoxel": [4, 6, 8]},
+            "reconstruction": {"coordinate_mode": "gaussian"}}))
+        np.save(self.root / "vol_train_fbp.npy", np.zeros((4, 6, 8)))
         args = argparse.Namespace(dataset=self.root, use_train_fbp=True, volume=None, fbp_output=None)
-        with forbid_optional_imports(), mock.patch.object(init, "reconstruct_from_train_views") as reconstruct:
-            actual, output = init.load_initial_volume(args)
+        with mock.patch.object(init, "reconstruct_from_train_views") as reconstruct:
+            with self.assertRaisesRegex(ValueError, "removed"):
+                init.load_initial_volume(args)
         reconstruct.assert_not_called()
-        self.assertEqual(output.name, "vol_train_fbp.npy")
-        np.testing.assert_array_equal(actual, expected)
-        self.assertFalse(list(self.root.glob("*.geometry.json")))
 
-    def test_metadata_cannot_enable_gaussian_train_reconstruction(self):
+    def test_train_reconstruction_keeps_physical_scanner(self):
         scanner = {"nVoxel": [4, 6, 8], "sVoxel": [1, 2, 3],
                    "sDetector": [8, 10], "mode": "parallel"}
         (self.root / "meta_data.json").write_text(json.dumps({
-            "scanner": scanner, "proj_train": [{"file_path": "view.npy", "angle": 0}],
-            "reconstruction": {"coordinate_mode": "gaussian"}}))
+            "scanner": scanner, "proj_train": [{"file_path": "view.npy", "angle": 0}]}))
         np.save(self.root / "view.npy", np.ones((8, 10), dtype=np.float32))
         backend = ModuleType("r2_gaussian.utils.ct_utils")
         backend.get_geometry_tigre = mock.Mock(side_effect=lambda cfg: cfg)
@@ -177,21 +172,23 @@ class OptInRegressionTests(unittest.TestCase):
             init.reconstruct_from_train_views(self.root)
         self.assertEqual(backend.get_geometry_tigre.call_args.args[0], scanner)
 
-    def test_default_point_positions_match_original_with_offset_non_cube_metadata(self):
+    def test_point_positions_use_physical_non_cubic_bounds(self):
+        from r2_gaussian.utils.geometry_utils import initialization_positions
+        volume = np.arange(192, dtype=np.float32).reshape(4, 6, 8) + 1
         volume_path = self.root / "volume.npy"
-        np.save(volume_path, np.arange(192, dtype=np.float32).reshape(4, 6, 8) + 1)
-        (self.root / "meta_data.json").write_text(json.dumps({
-            "scanner": {"sVoxel": [4, 2, 1], "offOrigin": [1, -2, .5]},
-            "reconstruction": {"coordinate_mode": "gaussian"}}))
-        points = []
-        for name, module in (("old", self.old_init), ("new", init)):
-            output = self.root / f"{name}.npy"
-            with forbid_optional_imports(), contextlib.redirect_stdout(io.StringIO()), mock.patch.object(
-                sys, "argv", ["init_from_fbp.py", "--volume", str(volume_path),
-                              "--output", str(output), "--n_points", "20", "--seed", "0"]):
-                module.main()
-            points.append(np.load(output))
-        np.testing.assert_array_equal(points[0], points[1])
+        np.save(volume_path, volume)
+        scanner = {"sVoxel": [4, 2, 1], "offOrigin": [1, -2, .5]}
+        (self.root / "meta_data.json").write_text(json.dumps({"scanner": scanner}))
+        output = self.root / "points.npy"
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(
+            sys, "argv", ["init_from_fbp.py", "--volume", str(volume_path),
+                          "--output", str(output), "--n_points", "20", "--seed", "0",
+                          "--normalize_percentile", "0"]):
+            init.main()
+        indices = np.argwhere(volume > 0)
+        selected = indices[np.random.default_rng(0).choice(len(indices), 20, replace=False)]
+        np.testing.assert_allclose(np.load(output)[:, :3],
+                                   initialization_positions(selected, volume.shape, scanner))
 
     def test_default_nifti_export_matches_original(self):
         volume = np.arange(192, dtype=np.float32).reshape(4, 6, 8) - 2
@@ -209,40 +206,25 @@ class OptInRegressionTests(unittest.TestCase):
         np.testing.assert_array_equal(exports[0][0], exports[1][0])
         self.assertEqual(exports[0][1], exports[1][1])
 
-    def test_gaussian_nifti_export_requires_explicit_mode(self):
-        sitk = ModuleType("SimpleITK")
-        image = mock.Mock()
-        sitk.GetImageFromArray = mock.Mock(return_value=image)
-        sitk.WriteImage = mock.Mock()
-        with mock.patch.dict(sys.modules, {"SimpleITK": sitk}):
-            init.save_fbp_nifti(np.ones((4, 6, 8)), self.root / "preview.nii.gz",
-                                {"sVoxel": [.01, .02, .03]}, coordinate_mode="gaussian")
-        np.testing.assert_allclose(image.SetSpacing.call_args.args[0],
-                                   np.array([.01, .02, .03]) * (2 / .03) / [4, 6, 8])
-
-    def test_each_feature_requires_its_own_explicit_option(self):
+    def test_auto_only_changes_volume_bounds(self):
         source = self.root / "input"
         source.mkdir()
         tifffile.imwrite(source / "Tomo_0.tiff", np.ones((8, 12), dtype=np.float32))
         for auto in (False, True):
-            for gaussian in (False, True):
-                command = ["--input_dir", str(source), "--output_dir", str(self.root / "out"),
-                           "--model_path", str(self.root / "model"), "--init_source", "train_fbp"]
-                if auto:
-                    command += ["--fbp_sVoxel", "auto", "--fbp_pixel_size", "0.00004",
-                                "--fbp_pixel_subsample", "1"]
-                if gaussian:
-                    command += ["--fbp_coordinate_mode", "gaussian"]
-                args = pipeline.resolve_args(pipeline.build_parser().parse_args(command))
-                pipeline.validate_args(args)
-                pipeline.resolve_pipeline_svoxel(args)
-                fbp = pipeline.build_fbp_command(args, None, [0, 0])
-                initial = pipeline.build_init_command(args, self.root / "init.npy")
-                with self.subTest(auto=auto, gaussian=gaussian):
-                    self.assertEqual("--coordinate_mode" in fbp, gaussian)
-                    self.assertEqual("--coordinate_mode" in initial, gaussian)
-                    self.assertEqual(fbp[fbp.index("--sVoxel") + 1] == "auto", auto)
-                    self.assertEqual(hasattr(args, "fbp_sVoxel_resolution"), auto)
+            command = ["--input_dir", str(source), "--output_dir", str(self.root / "out"),
+                       "--model_path", str(self.root / "model"), "--init_source", "train_fbp"]
+            if auto:
+                command += ["--fbp_sVoxel", "auto", "--fbp_pixel_size", "0.00004",
+                            "--fbp_pixel_subsample", "1"]
+            args = pipeline.resolve_args(pipeline.build_parser().parse_args(command))
+            pipeline.validate_args(args)
+            pipeline.resolve_pipeline_svoxel(args)
+            fbp = pipeline.build_fbp_command(args, None, [0, 0])
+            initial = pipeline.build_init_command(args, self.root / "init.npy")
+            self.assertNotIn("--coordinate_mode", fbp)
+            self.assertNotIn("--coordinate_mode", initial)
+            self.assertEqual(fbp[fbp.index("--sVoxel") + 1] == "auto", auto)
+            self.assertEqual(hasattr(args, "fbp_sVoxel_resolution"), auto)
 
 
 if __name__ == "__main__":

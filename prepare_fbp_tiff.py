@@ -69,9 +69,6 @@ def build_geometry(args, detector_shape):
     is the pixel size at the rotation axis, i.e. the detector pixel pitch
     divided by the geometric magnification ``DSD / DSO``.
     """
-    if getattr(args, "coordinate_mode", None) == "gaussian":
-        from scripts.gaussian_fbp import build_geometry as build_gaussian_geometry
-        return build_gaussian_geometry(args, detector_shape, build_geometry)
     height, width = detector_shape
     effective_pixel_size = args.pixel_size * args.pixel_subsample
     mode = args.mode
@@ -135,9 +132,6 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images, f
     ``raw_images`` must already have the duplicate endpoint removed, i.e. it
     corresponds one-to-one with ``projections`` and ``angles``.
     """
-    if getattr(args, "coordinate_mode", None) == "gaussian":
-        from scripts.gaussian_fbp import reconstruct
-        return reconstruct(args, projections, angles, build_geometry, reconstruct_volume)
     recon_subsample = (
         args.pixel_subsample
         if args.recon_pixel_subsample is None
@@ -178,11 +172,8 @@ def reconstruct_with_optional_subsample(args, projections, angles, raw_images, f
 
 
 def main(args):
-    gaussian_mode = getattr(args, "coordinate_mode", None) == "gaussian"
     stripe_enabled = getattr(args, "stripe_correction", None) is not None
     stripe_info = None
-    if gaussian_mode and args.mode != "parallel":
-        raise ValueError("--coordinate_mode gaussian requires --mode parallel")
     svoxel_resolution = None
     args.input_dir = Path(args.input_dir)
     args.output_dir = Path(args.output_dir)
@@ -255,10 +246,10 @@ def main(args):
             (tifffile.imread(path) for path in paths), args, flat=flat_field,
             angles=native_angles, preview_dir=args.output_dir,
         )
-        if args.recon_pixel_subsample is not None and not gaussian_mode:
+        if args.recon_pixel_subsample is not None:
             full_resolution = native_integrals
         del native_integrals
-    elif args.recon_pixel_subsample is not None and not gaussian_mode:
+    elif args.recon_pixel_subsample is not None:
         full_resolution = [tifffile.imread(path) for path in paths]
         projections_all = np.stack(
             [process_projection(image, args, flat=flat_field) for image in full_resolution], axis=0
@@ -345,7 +336,7 @@ def main(args):
     preview_low, preview_high = save_fbp_preview(
         output,
         volume,
-        preview_size(args) if gaussian_mode else args.sVoxel,
+        args.sVoxel,
     )
 
     sparse_indices = None
@@ -393,7 +384,7 @@ def main(args):
         sparse_output.parent.mkdir(parents=True, exist_ok=True)
         np.save(sparse_output, sparse_volume)
         save_fbp_preview(
-            output, sparse_volume, preview_size(args) if gaussian_mode else args.sVoxel, prefix=sparse_output.stem
+            output, sparse_volume, args.sVoxel, prefix=sparse_output.stem
         )
         print(f"Saved sparse FBP volume: {sparse_output}")
 
@@ -482,9 +473,6 @@ def main(args):
             "center_json": str(args.center_json.resolve()) if args.center_json else None,
         },
     }
-    if gaussian_mode:
-        from scripts.gaussian_fbp import reconstruction_metadata
-        metadata["reconstruction"] = reconstruction_metadata(scanner)
     with (output / "meta_data.json").open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
     print(f"Saved FBP volume: {output / 'vol_fbp.npy'}")
@@ -497,13 +485,6 @@ def main(args):
         f"Saved {len(angles)} full views, {len(train_records)} training views, "
         f"and {len(test_records)} test views"
     )
-
-
-def preview_size(args):
-    if getattr(args, "coordinate_mode", None) == "gaussian":
-        from scripts.gaussian_fbp import preview_size as gaussian_preview_size
-        return gaussian_preview_size(args.sVoxel)
-    return args.sVoxel
 
 
 def build_parser():
@@ -629,7 +610,6 @@ def build_parser():
     )
     parser.add_argument("--nVoxel", nargs=3, type=int, default=[128, 128, 128])
     parser.add_argument("--sVoxel", nargs="+", action=SVoxelAction, default=[2.0, 2.0, 2.0], metavar="AUTO_OR_X_Y_Z")
-    parser.add_argument("--coordinate_mode", choices=["physical", "gaussian"], default=None)
     parser.add_argument("--offOrigin", nargs=3, type=float, default=[0.0, 0.0, 0.0])
     parser.add_argument(
         "--offDetector", nargs=2, type=float, default=[0.0, 0.0],

@@ -5,9 +5,10 @@ import json
 from pathlib import Path
 
 import numpy as np
+from r2_gaussian.utils.geometry_utils import initialization_positions, validate_physical_dataset
 
 
-def reconstruct_from_train_views(dataset: Path, coordinate_mode=None) -> np.ndarray:
+def reconstruct_from_train_views(dataset: Path) -> np.ndarray:
     """Reconstruct an initialization volume from the dataset training views."""
     metadata_path = dataset / "meta_data.json"
     if not metadata_path.exists():
@@ -17,6 +18,7 @@ def reconstruct_from_train_views(dataset: Path, coordinate_mode=None) -> np.ndar
 
     with metadata_path.open("r", encoding="utf-8") as handle:
         metadata = json.load(handle)
+    validate_physical_dataset(metadata)
 
     scanner_cfg = metadata.get("scanner")
     train_records = metadata.get("proj_train")
@@ -61,9 +63,6 @@ def reconstruct_from_train_views(dataset: Path, coordinate_mode=None) -> np.ndar
 
     projections_array = np.stack(projections, axis=0)
     angles_array = np.asarray(angles, dtype=np.float32)
-    if coordinate_mode == "gaussian":
-        from scripts.fbp_geometry import reconstruction_scanner
-        scanner_cfg = reconstruction_scanner(scanner_cfg, "gaussian")
     geometry = get_geometry_tigre(scanner_cfg)
     volume = recon_volume(projections_array, angles_array, geometry, "fbp")
     volume = np.asarray(volume, dtype=np.float32)
@@ -78,13 +77,11 @@ def load_initial_volume(args: argparse.Namespace) -> tuple[np.ndarray, Path]:
             raise ValueError("--dataset is required when --use_train_fbp is set")
         if args.volume is not None:
             raise ValueError("Do not combine --volume with --use_train_fbp")
+        metadata_path = args.dataset / "meta_data.json"
+        validate_physical_dataset(json.loads(metadata_path.read_text(encoding="utf-8")))
         if getattr(args, "stripe_correction", None) is not None:
             from scripts.stripe_correction import dataset_metadata, load_train_volume
             dataset_metadata(args.dataset, args.stripe_correction)
-            if getattr(args, "coordinate_mode", None) != "gaussian":
-                return load_train_volume(args, reconstruct_from_train_views, dataset_shape_from_metadata)
-        if getattr(args, "coordinate_mode", None) == "gaussian":
-            from scripts.gaussian_fbp import load_train_volume
             return load_train_volume(args, reconstruct_from_train_views, dataset_shape_from_metadata)
 
         dataset = args.dataset.resolve()
@@ -149,7 +146,6 @@ def save_fbp_nifti(
     volume: np.ndarray,
     output: Path,
     scanner_cfg: dict,
-    coordinate_mode=None,
 ) -> None:
     """Save the complete train-view FBP volume as a Slicer-viewable NIfTI."""
     try:
@@ -169,9 +165,6 @@ def save_fbp_nifti(
     s_voxel = np.asarray(scanner_cfg.get("sVoxel"), dtype=np.float64)
     if s_voxel.shape != (3,) or not np.all(np.isfinite(s_voxel)) or np.any(s_voxel <= 0):
         raise ValueError("Scanner metadata must contain three positive sVoxel values")
-    if coordinate_mode == "gaussian":
-        from scripts.gaussian_fbp import preview_size
-        s_voxel = preview_size(s_voxel)
     spacing = tuple(
         float(size) / float(count) for size, count in zip(s_voxel, volume.shape)
     )
@@ -315,8 +308,6 @@ def main():
         default=None,
         help="Output point cloud. Defaults to <volume_dir>/init_<volume_dir_name>.npy.",
     )
-    parser.add_argument("--coordinate_mode", choices=["physical", "gaussian"], default=None,
-                        help="Explicitly opt in to Gaussian-compatible FBP; metadata never enables it.")
     parser.add_argument("--n_points", type=int, default=50000)
     parser.add_argument("--density_thresh", type=float, default=0.05)
     parser.add_argument("--density_rescale", type=float, default=0.15)
@@ -380,7 +371,6 @@ def main():
         raise ValueError("--fbp_nii_output requires --visualize_fbp_nii")
     if args.visualize_fbp_nii and not args.use_train_fbp:
         raise ValueError("--visualize_fbp_nii requires --use_train_fbp")
-    gaussian_mode = args.coordinate_mode == "gaussian"
 
     volume, volume_path = load_initial_volume(args)
     if volume.ndim != 3:
@@ -396,7 +386,6 @@ def main():
             volume,
             nii_output.resolve(),
             dataset_scanner_from_metadata(args.dataset.resolve()),
-            **({"coordinate_mode": "gaussian"} if gaussian_mode else {}),
         )
 
     if args.normalize_percentile > 0:
@@ -418,13 +407,14 @@ def main():
 
     rng = np.random.default_rng(args.seed)
     selected = indices[rng.choice(len(indices), args.n_points, replace=False)]
-    shape = np.asarray(volume.shape, dtype=np.float32)
-    # Volume coordinates are already in the R2-Gaussian [-1, 1]^3 convention.
-    positions = (selected.astype(np.float32) + 0.5) / shape * 2.0 - 1.0
-    if gaussian_mode:
-        from scripts.gaussian_fbp import point_positions
-        scanner_dir = args.dataset.resolve() if args.use_train_fbp else volume_path.parent
-        positions = point_positions(selected, volume.shape, scanner_dir)
+    scanner_dir = args.dataset.resolve() if args.use_train_fbp else volume_path.parent
+    metadata_path = scanner_dir / "meta_data.json"
+    scanner = None
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        validate_physical_dataset(metadata)
+        scanner = metadata["scanner"]
+    positions = initialization_positions(selected, volume.shape, scanner)
     densities = volume[tuple(selected.T)] * args.density_rescale
     point_cloud = np.concatenate([positions, densities[:, None]], axis=1).astype(np.float32)
 
