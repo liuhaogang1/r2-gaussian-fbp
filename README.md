@@ -102,6 +102,111 @@ PyTorch/CUDA 环境中运行 `scripts/build_pose_rasterizer.ps1`；默认流程�
 <model_path>/test/iter_*/
 ```
 
+## 可选：FBP 初始化前轻度去噪
+
+默认关闭，旧命令、FBP 缓存、归一化、阈值、随机采样和默认初始化文件的
+行为保持不变。显式添加以下参数后，才对选定的初始化体执行三维高斯滤波：
+
+```bash
+  --init_denoise \
+  --init_denoise_sigma 0.8 \
+  --init_denoise_save_nii
+```
+
+处理顺序为：读取 FBP → 清理非有限值和负值 → Gaussian 滤波
+（`sigma=0.8` 体素，`mode=nearest`，`truncate=4`）→ 按去噪体正值的
+P99.5 归一化 → 严格大于密度阈值的候选区 → 原有无放回采样。
+选点和初始密度均使用去噪体；`init_density_rescale` 是密度缩放，不是空间尺度。
+去噪后的 P99.5 会变化，因此阈值相同不代表原始强度界限相同。
+候选不足时直接报错，不自动降低阈值或重复采样。
+
+`full_fbp`、`train_fbp` 和 `custom` 均支持；只处理实际选定的初始化来源。
+`train_fbp` 仍遵循现有训练视角 FBP 的重建/缓存规则；使用已有缓存前，应确认它
+对应当前的投影和视角集合，不能把本功能的输入文件哈希当成旧缓存来源的证明。
+不修改训练投影、原始 FBP、原始默认初始化、训练损失或 FBP 参考体监督。
+首轮建议保留 `init_density_thresh=0.10`、`init_density_rescale=0.25`、
+`init_n_points=100000` 及原训练参数，只比较去噪这一项。
+
+启用后默认输出：
+
+```text
+<model_path>/init_denoise/
+    init_points.npy
+    vol_init_denoised.npy
+    vol_init_denoised.nii.gz        # --init_denoise_save_nii 时生成
+    comparison_center_{x,y,z}.png   # 原体/去噪体共用灰度窗口，另有差值图
+    candidate_mask_center_{x,y,z}.png
+    denoise_report.json
+    pipeline_manifest.json
+    .pipeline_train_config.yml
+```
+
+启用时不再额外覆写数据集的 `init_<dataset_name>.npy`，训练的 `--ply_path`
+和生成的训练配置均指向本次新点云。可通过 `--init_denoise_output_dir` 指定
+产物目录（运行 manifest 仍位于模型的 `init_denoise` 目录），通过
+`--init_output` 指定独立的 `.npy` 点云文件。指定 `train_model_path` 时以上模型
+目录以它为准。
+
+去噪体保存的是归一化之前的强度。NIfTI 的 I/J/K 对应 NPY 的 X/Y/Z，间距为
+`sVoxel/nVoxel`，第一个体素中心为 `offOrigin-sVoxel/2+spacing/2`，
+使用恒等 LPS 方向和数据集原长度单位。旧项目导出器使用另一种 XY 显示约定；
+不能仅凭旧 NIfTI 的屏幕朝向判断新文件错位，应核对数组轴及几何。
+导出使用已有流式 NIfTI 写入器，无需新增依赖。来源体旁必须有有效
+`meta_data.json`；不会因为输出目录改变而退回单位立方体坐标。
+
+使用已有数据集时，从初始化开始，并使用新的模型目录：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+python -u run_pipeline.py \
+  --input_dir /root/fnvme/data_10_8/1/cata2_8.4kev_400ms_1 \
+  --output_dir /root/fnvme/TEST_10.27/stripe_correct/data_1_cata2_40nm_1 \
+  --model_path /root/fnvme/TEST_10.27/stripe_correct/models/data_1_cata2_40nm_1_denoise08 \
+  --config /root/fnvme/data_10_8/1/cata2_8.4kev_400ms_1/config.txt \
+  --start_from init --stop_after train --skip_center --skip_fbp \
+  --init_source train_fbp \
+  --init_denoise --init_denoise_sigma 0.8 --init_denoise_save_nii \
+  --init_n_points 100000 --init_density_thresh 0.10 \
+  --init_density_rescale 0.25 --init_normalize_percentile 99.5 \
+  --train_config /root/fnvme/r2-gaussian-fbp/configs/pose_parallel.yaml \
+  --train_pose_enabled \
+  --train_parallel_optimize_angle \
+  --train_parallel_optimize_global_detector_shift \
+  --no-train_parallel_optimize_per_view_detector_shift \
+  --train_parallel_optimize_beam_tilt \
+  --train_parallel_optimize_detector_roll \
+  --train_max_num_gaussians 300000 --train_iterations 30000 \
+  --train_test_iterations 30000 --train_save_iterations 30000 \
+  --seed 0
+```
+
+命令使用当前数据集中的视角记录，不会恢复此前删除的视角。做对照前应确认
+两组使用相同的 `meta_data.json` 和有效 FBP 来源。如果只想查看初始化结果，
+把 `--stop_after train` 改为 `--stop_after init`。
+
+不能同时指定 `--skip_init`、`--start_from train`、外部 `--train_ply_path`
+或旧 `--train_start_checkpoint`，以免去噪参数被忽略或新点云被替换。
+`--resume` 会核对去噪/采样参数、输入体和元数据 SHA256、点云及去噪体 SHA256；
+变更后会报错，需用新实验目录重新初始化和训练。关闭去噪时不能续跑同一个
+去噪实验。正常重做初始化会从来源 FBP 重新滤波，不把去噪结果当缓存反复处理。
+
+统一 YAML 也可启用，命令行优先：
+
+```yaml
+init:
+  denoise: true
+  denoise_sigma: 0.8
+  denoise_save_nii: true
+  density_thresh: 0.10
+  density_rescale: 0.25
+  n_points: 100000
+```
+
+单独运行初始化脚本时，对应参数为 `--denoise`、`--denoise_sigma`、
+`--denoise_output_dir`、`--denoise_save_nii`；默认产物放在源体目录的
+`init_denoise` 下。之后手动训练必须通过 `--ply_path` 指向新点云。
+
 ## 自动计算重建视野 sVoxel
 
 `--fbp_sVoxel auto` 显式启用逐数据视野计算，实现位于

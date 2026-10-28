@@ -318,6 +318,13 @@ def main():
         help="Normalize positive volume values by this percentile; 0 disables it.",
     )
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--denoise", action="store_true",
+                        help="Denoise only the initialization input; preserve original FBP and canonical point cloud.")
+    parser.add_argument("--denoise_sigma", type=float, default=0.8,
+                        help="3D Gaussian filter sigma in voxel units (requires --denoise).")
+    parser.add_argument("--denoise_output_dir", type=Path, default=None)
+    parser.add_argument("--denoise_save_nii", action="store_true",
+                        help="Export denoised XYZ NIfTI in the original dataset geometry.")
     parser.add_argument(
         "--visualize",
         action="store_true",
@@ -367,6 +374,11 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.denoise:
+        from scripts.init_denoise import validate_settings
+        validate_settings(args.denoise_sigma, args.normalize_percentile,
+                          args.density_thresh, args.density_rescale, args.n_points)
+
     if args.fbp_nii_output is not None and not args.visualize_fbp_nii:
         raise ValueError("--fbp_nii_output requires --visualize_fbp_nii")
     if args.visualize_fbp_nii and not args.use_train_fbp:
@@ -378,16 +390,31 @@ def main():
     volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
     volume = np.clip(volume, 0.0, None)
 
+    if args.denoise:
+        from scripts.init_denoise import check_output_paths, denoise_volume, load_scanner
+        scanner_dir = args.dataset.resolve() if args.use_train_fbp else volume_path.parent
+        denoise_metadata = scanner_dir / "meta_data.json"
+        denoise_scanner = load_scanner(denoise_metadata, volume.shape)
+        denoise_dir = (args.denoise_output_dir or volume_path.parent / "init_denoise").resolve()
+        args.output = (args.output or denoise_dir / "init_points.npy").resolve()
+        check_output_paths(volume_path, denoise_metadata, denoise_dir, args.output)
+        original_volume = volume
+        denoised_volume, denoise_elapsed = denoise_volume(volume, args.denoise_sigma)
+        volume = denoised_volume
+
     if args.visualize_fbp_nii:
         nii_output = args.fbp_nii_output
         if nii_output is None:
             nii_output = volume_path.with_suffix(".nii.gz")
         save_fbp_nifti(
-            volume,
+            original_volume if args.denoise else volume,
             nii_output.resolve(),
             dataset_scanner_from_metadata(args.dataset.resolve()),
         )
 
+    if args.denoise:
+        # Raw legacy FBP export above intentionally remains the original FBP.
+        normalization_scale = 1.0
     if args.normalize_percentile > 0:
         positive = volume[volume > 0]
         if positive.size == 0:
@@ -396,6 +423,8 @@ def main():
         if scale <= 0 or not np.isfinite(scale):
             raise ValueError("Invalid volume normalization scale")
         volume = np.clip(volume / scale, 0.0, 1.0)
+        if args.denoise:
+            normalization_scale = scale
 
     mask = volume > args.density_thresh
     indices = np.argwhere(mask)
@@ -426,10 +455,16 @@ def main():
 
     # initialize_gaussian() looks for init_<dataset_name>.npy when --ply_path
     # is omitted. Keep that convention even when a custom output name is used.
-    if output.resolve() != canonical_output.resolve():
+    if not args.denoise and output.resolve() != canonical_output.resolve():
         np.save(canonical_output, point_cloud)
         print(f"Saved canonical initialization to {canonical_output}")
     print(f"density range: {densities.min():.6g} ~ {densities.max():.6g}")
+
+    if args.denoise:
+        from scripts.init_denoise import save_artifacts
+        save_artifacts(original_volume, denoised_volume, mask, selected, point_cloud,
+                       denoise_scanner, volume_path, denoise_metadata, denoise_dir,
+                       output, args, normalization_scale, denoise_elapsed)
 
     if args.visualize:
         preview_output = args.visualize_output

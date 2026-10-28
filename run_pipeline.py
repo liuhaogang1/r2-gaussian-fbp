@@ -22,6 +22,12 @@ from scripts.fbp_options import SVoxelAction, parse_svoxel_option
 ROOT = Path(__file__).resolve().parent
 STAGES = ("center", "fbp", "init", "train", "test")
 
+# Absent from resolved legacy arguments unless explicitly enabled.
+DENOISE_DEFAULTS = {
+    "init_denoise": False, "init_denoise_sigma": 0.8,
+    "init_denoise_output_dir": None, "init_denoise_save_nii": False,
+}
+
 
 DEFAULTS: dict[str, Any] = {
     # Global orchestration
@@ -239,6 +245,7 @@ PATH_KEYS = {
     "center_angles_npy", "center_endpoint_pair_npy", "fbp_sparse_fbp_output",
     "init_volume", "init_fbp_output", "init_output", "init_visualize_output",
     "init_visualize_slice_output", "init_fbp_nii_output", "train_source_path",
+    "init_denoise_output_dir",
     "train_slice_reference_path",
     "train_model_path", "train_ply_path", "train_start_checkpoint",
     "test_source_path", "test_model_path", "test_ply_path", "test_pose_result",
@@ -401,6 +408,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Initialization.
     _add(parser, "--init_source", dest="init_source", choices=["full_fbp", "train_fbp", "custom"])
+    _add_bool(parser, "--init_denoise")
+    _add(parser, "--init_denoise_sigma", dest="init_denoise_sigma", type=float)
+    _add(parser, "--init_denoise_output_dir", dest="init_denoise_output_dir", type=Path)
+    _add_bool(parser, "--init_denoise_save_nii")
     _add(parser, "--init_volume", dest="init_volume", type=Path)
     _add(parser, "--init_fbp_output", dest="init_fbp_output", type=Path)
     _add(parser, "--init_output", dest="init_output", type=Path)
@@ -542,7 +553,7 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
     values = dict(DEFAULTS)
 
     def merge_loaded(loaded: dict[str, Any], source: Path) -> None:
-        unknown = sorted(set(loaded) - set(DEFAULTS) - {
+        unknown = sorted(set(loaded) - set(DEFAULTS) - set(DENOISE_DEFAULTS) - {
             "stripe_correction", "stripe_ncore", "stripe_row_chunk"})
         if unknown:
             raise ValueError(f"Unknown keys in {source}: {', '.join(unknown)}")
@@ -557,6 +568,15 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
         pipeline_config = Path(pipeline_config).resolve()
         merge_loaded(load_yaml(pipeline_config), pipeline_config)
     values.update(vars(parsed))
+    for key in ("init_denoise", "init_denoise_save_nii"):
+        if key in values and not isinstance(values[key], bool):
+            raise ValueError(f"{key} must be a boolean")
+    if values.get("init_denoise", False):
+        for key, default in DENOISE_DEFAULTS.items():
+            values.setdefault(key, default)
+    else:
+        for key in DENOISE_DEFAULTS:
+            values.pop(key, None)
     if values.get("stripe_correction") is not None:
         from scripts.stripe_correction import normalize_options
         values["stripe_correction"] = normalize_options(values["stripe_correction"])
@@ -749,6 +769,11 @@ def build_init_command(args: argparse.Namespace, init_output: Path) -> list[str]
             raise ValueError("--init_volume is required when --init_source=custom")
         add_option(command, "--volume", args.init_volume)
     add_option(command, "--output", init_output)
+    if getattr(args, "init_denoise", False):
+        add_bool(command, "--denoise", True)
+        add_option(command, "--denoise_sigma", args.init_denoise_sigma)
+        add_option(command, "--denoise_output_dir", args.init_denoise_output_dir)
+        add_bool(command, "--denoise_save_nii", args.init_denoise_save_nii)
     for name, flag in (
         ("init_n_points", "--n_points"), ("init_density_thresh", "--density_thresh"),
         ("init_density_rescale", "--density_rescale"), ("init_normalize_percentile", "--normalize_percentile"),
@@ -894,6 +919,16 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("fbp_n_train must be positive and fbp_n_test cannot be negative")
     if args.init_n_points < 1 or args.init_density_thresh < 0:
         raise ValueError("init_n_points must be positive and init_density_thresh cannot be negative")
+    if getattr(args, "init_denoise", False):
+        from scripts.init_denoise import validate_settings
+        validate_settings(args.init_denoise_sigma, args.init_normalize_percentile,
+                          args.init_density_thresh, args.init_density_rescale, args.init_n_points)
+        if not stage_in_window(args, "init"):
+            raise ValueError("--init_denoise requires the init stage; remove --skip_init and use --start_from init (or earlier)")
+        if args.train_ply_path is not None:
+            raise ValueError("--init_denoise supplies its own point cloud; remove --train_ply_path")
+        if args.train_start_checkpoint is not None:
+            raise ValueError("--init_denoise cannot use --train_start_checkpoint: checkpoint loading replaces initialization")
     if args.init_fbp_nii_output is not None and not args.init_visualize_fbp_nii:
         raise ValueError("init_fbp_nii_output requires init_visualize_fbp_nii")
     if args.init_visualize_fbp_nii and args.init_source != "train_fbp":
@@ -952,8 +987,19 @@ def main(args: argparse.Namespace) -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.fbp_preprocess_only and stage_in_window(args, "init"):
         raise ValueError("fbp_preprocess_only requires stop_after=fbp or skipping init/train/test")
-    manifest_path = args.output_dir / "pipeline_manifest.json"
-    init_output = (args.init_output or args.output_dir / ("init_" + args.output_dir.name + ".npy")).resolve()
+    denoise_enabled = bool(getattr(args, "init_denoise", False))
+    denoise_manifest = (Path(args.train_model_path or args.model_path).resolve()
+                        / "init_denoise" / "pipeline_manifest.json")
+    if denoise_enabled:
+        args.init_denoise_output_dir = (args.init_denoise_output_dir or
+                                       Path(args.train_model_path or args.model_path) / "init_denoise").resolve()
+        manifest_path = denoise_manifest
+        init_output = (args.init_output or args.init_denoise_output_dir / "init_points.npy").resolve()
+    else:
+        if args.resume and denoise_manifest.exists():
+            raise ValueError("Cannot resume a denoised-initialization run with denoising disabled; keep --init_denoise")
+        manifest_path = args.output_dir / "pipeline_manifest.json"
+        init_output = (args.init_output or args.output_dir / ("init_" + args.output_dir.name + ".npy")).resolve()
     center_output = Path(args.center_output).resolve()
     args.center_output = center_output
     args.init_output = init_output
@@ -972,6 +1018,9 @@ def main(args: argparse.Namespace) -> None:
         "center_output": center_output,
         "init_output": init_output,
     }
+    if denoise_enabled:
+        from scripts.init_denoise import pipeline_identity
+        manifest["denoise_identity"] = pipeline_identity(args)
     previous: dict[str, Any] = {}
     if args.resume and manifest_path.exists():
         try:
@@ -980,6 +1029,13 @@ def main(args: argparse.Namespace) -> None:
             previous = {}
         if previous.get("resolved_arguments", {}).get("stripe_correction") != getattr(args, "stripe_correction", None):
             raise ValueError("Stripe correction changed since the previous run; use a new output directory without --resume")
+        if denoise_enabled or previous.get("resolved_arguments", {}).get("init_denoise", False):
+            from scripts.init_denoise import validate_resume
+            validate_resume(args, previous)
+    if denoise_enabled and stage_in_window(args, "train"):
+        model = Path(args.train_model_path or args.model_path)
+        if ((model / "point_cloud").exists() or (model / "cfg_args").exists()) and not (args.resume and previous):
+            raise ValueError("Denoised initialization requires a new model directory, or a matching --resume run")
     if getattr(args, "stripe_correction", None) is not None and not args.dry_run and (
         args.skip_fbp or not stage_in_window(args, "fbp")
         or (args.resume and previous.get("stage_status", {}).get("fbp") == "success")
@@ -988,11 +1044,15 @@ def main(args: argparse.Namespace) -> None:
         dataset_metadata(args.output_dir, args.stripe_correction)
     def save() -> None:
         manifest["resolved_arguments"] = vars(args)
+        if denoise_enabled and manifest["stage_status"]["init"] in {"success", "resumed"}:
+            from scripts.init_denoise import file_digest
+            manifest["denoise_report_sha256"] = file_digest(args.init_denoise_output_dir / "denoise_report.json")
         write_manifest(manifest_path, manifest)
 
     def run_stage(stage: str, stage_command: list[str]) -> None:
         manifest["stage_commands"][stage] = stage_command
-        if args.resume and previous.get("stage_status", {}).get(stage) == "success":
+        previous_status = previous.get("stage_status", {}).get(stage)
+        if args.resume and (previous_status == "success" or (denoise_enabled and previous_status == "resumed")):
             manifest["stage_status"][stage] = "resumed"
             print(f"[{stage}] resume: previous success retained", flush=True)
             if stage not in {"center", "fbp"}:
@@ -1060,7 +1120,8 @@ def main(args: argparse.Namespace) -> None:
             raise FileNotFoundError(f"Initialization point cloud is missing: {train_ply}")
         train_source = Path(args.train_source_path or args.output_dir).resolve()
         train_model = Path(args.train_model_path or args.model_path).resolve()
-        train_config_path = args.output_dir / ".pipeline_train_config.yml"
+        train_config_path = ((args.init_denoise_output_dir if denoise_enabled else args.output_dir)
+                             / ".pipeline_train_config.yml")
         write_train_config(args, train_config_path, train_source, train_model, Path(args.train_ply_path or init_output).resolve())
         run_stage("train", build_train_command(args, init_output, train_config_path))
     else:

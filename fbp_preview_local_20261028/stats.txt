@@ -1,0 +1,11 @@
+input=C:\Users\94012\Desktop\vol_fbp.npy
+shape=(256, 256, 256)
+dtype=float32
+sigma=0.8
+threshold=0.1
+min_component=64
+p99.5_scale=2.518139123916626
+components=989
+kept_voxels=6348785
+kept_fraction=0.37841707468032837
+spacing=(1.0, 1.0, 1.0)
