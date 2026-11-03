@@ -417,8 +417,10 @@ __global__ void preprocessCUDA(
 	float S0 = proj[0] * m.x + proj[4] * m.y + proj[8] * m.z + proj[12];
 	float S1 = proj[1] * m.x + proj[5] * m.y + proj[9] * m.z + proj[13];
 	float S3 = proj[3] * m.x + proj[7] * m.y + proj[11] * m.z + proj[15];
-	float dldx = 0.5 * dL_dmean2D[idx].x * W;
-	float dldy = 0.5 * dL_dmean2D[idx].y * H;
+	// dL_dmean2D is already expressed in NDC units: renderCUDA applies the
+	// pixel-to-NDC W/2 and H/2 factors when accumulating this gradient.
+	float dldx = dL_dmean2D[idx].x;
+	float dldy = dL_dmean2D[idx].y;
 	dL_dproj[0] = dldx * m.x / S3;
 	dL_dproj[1] = dldy * m.x / S3;
 	dL_dproj[2] = 0.0;
