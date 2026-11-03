@@ -29,3 +29,6 @@ other_scripts
 
 # Generated runtime logs at any depth, including uppercase extensions
 *.[lL][oO][gG]
+
+# Generated CSV results and intermediate tables at any depth
+*.[cC][sS][vV]
