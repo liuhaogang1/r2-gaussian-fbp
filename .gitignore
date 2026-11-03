@@ -26,3 +26,6 @@ other_scripts
 *.[jJ][pP][gG]
 *.[pP][nN][gG]
 *.[nN][pP][yY]
+
+# Generated runtime logs at any depth, including uppercase extensions
+*.[lL][oO][gG]
