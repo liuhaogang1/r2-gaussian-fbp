@@ -43,6 +43,7 @@ def parser():
     p.add_argument('--skip-real-branches', action='store_true', help='Skip real-data ordinary/sparse/resume side runs')
     p.add_argument('--plan', action='store_true', help='Print settings only; create nothing')
     p.add_argument('--_preflight-config', type=Path, help=argparse.SUPPRESS)
+    p.add_argument('--_chunk-check-config', type=Path, help=argparse.SUPPRESS)
     return p
 
 
@@ -111,11 +112,19 @@ class Runner:
 
     def skip(self, name, reason):
         print(f'[SKIP] {name}: {reason}',flush=True)
-        self.results['stages'].append(dict(name=name,status='skipped',reason=reason))
+        log=self.out/'logs'/f'{name}.log'
+        log.write_text(f'[SKIP] {name}: {reason}\n',encoding='utf-8')
+        self.results['stages'].append(dict(name=name,status='skipped',reason=reason,log=str(log)))
         self.save()
+        return False
 
-    def stage(self, name, action):
-        record=dict(name=name,status='running',log=str(self.out/'logs'/f'{name}.log'))
+    def stage(self, name, action, requires=()):
+        states={s['name']:s['status'] for s in self.results['stages']}
+        blocked=[f'{dependency}={states.get(dependency,"not run")}' for dependency in requires
+                 if states.get(dependency)!='passed']
+        if blocked:
+            return self.skip(name,'Prerequisite not passed: '+', '.join(blocked))
+        record=dict(name=name,status='running',log=str(self.out/'logs'/f'{name}.log'),requires=list(requires))
         self.results['stages'].append(record)
         self.save()
         print(f'\n[START] {name} | {dt.datetime.now().astimezone().isoformat()}',flush=True)
@@ -127,15 +136,18 @@ class Runner:
             import traceback
             with Path(record['log']).open('a',encoding='utf-8') as f:
                 f.write('\n'+traceback.format_exc())
-            record.update(status='failed',error=str(exc))
-            self.results['status']='failed'
-            raise
+            interrupted=not isinstance(exc,Exception)
+            record.update(status='interrupted' if interrupted else 'failed',error=str(exc) or type(exc).__name__)
+            self.results['status']=record['status']
+            if interrupted:
+                raise
         finally:
             record['seconds']=time.monotonic()-start
             self.save()
             print(f"[{record['status'].upper()}] {name} ({record['seconds']:.1f}s) | {record['log']}",flush=True)
+        return record['status']=='passed'
 
-    def command(self, name, command):
+    def command(self, name, command, requires=()):
         command=list(map(str,command))
         def execute(log):
             print('+ '+shlex.join(command),flush=True)
@@ -160,7 +172,30 @@ class Runner:
             if code:
                 raise RuntimeError(f'{name}: command exited {code}; see {log}')
             return dict(command=command,returncode=code)
-        self.stage(name,execute)
+        return self.stage(name,execute,requires=requires)
+
+    def finish(self, interrupted=False):
+        stages=self.results['stages']
+        failures=[dict(name=s['name'],log=s['log'],error=s['error']) for s in stages if s['status']=='failed']
+        interrupted=interrupted or any(s['status']=='interrupted' for s in stages)
+        counts={status:sum(s['status']==status for s in stages)
+                for status in ('passed','failed','skipped','interrupted')}
+        self.results.update(status='interrupted' if interrupted else ('failed' if failures else 'completed'),
+                            finished=dt.datetime.now().astimezone().isoformat(),failures=failures,counts=counts,
+                            note='Smoke validation only; metrics against FBP are not independent ground truth.')
+        self.save()
+        lines=[f"RESULT: {self.results['status'].upper()} | "+', '.join(f'{k}={v}' for k,v in counts.items())]
+        for status in ('failed','interrupted','skipped'):
+            for stage in stages:
+                if stage['status']==status:
+                    lines.extend([f"[{status.upper()}] {stage['name']}: {stage.get('error',stage.get('reason',''))}",
+                                  f"  log: {stage['log']}"])
+        lines.extend([f'Summary: {self.out / "summary.tsv"}',f'JSON: {self.out / "summary.json"}',
+                      f'Main model (if produced): {self.out / "real/model"}'])
+        report='\n'.join(lines)+'\n'
+        (self.out/'report.txt').write_text(report,encoding='utf-8')
+        print('\n'+report,flush=True)
+        return 130 if interrupted else int(bool(failures))
 
 
 def preflight(a, out, cfg, log):
@@ -210,10 +245,10 @@ def preflight(a, out, cfg, log):
     return data
 
 
-def check_real(out, part, iteration, log):
+def check_real(out, part, iteration, log, model=None):
     import numpy as np
     data=out/'real/dataset'
-    model=out/'real/model'
+    model=model or out/'real/model'
     meta=json.loads((data/'meta_data.json').read_text())
     def array(path,shape=None):
         v=np.load(path,mmap_mode='r')
@@ -260,12 +295,116 @@ def check_real(out, part, iteration, log):
         result.update(points=len(points),candidate_count=report['candidate_count'],xyz_roundtrip=True)
     elif part=='train':
         array(model/f'point_cloud/iteration_{iteration}/vol_pred.npy',meta['scanner']['nVoxel'])
+        if not (model/f'point_cloud/iteration_{iteration}/point_cloud.pickle').is_file():
+            raise FileNotFoundError('Final Gaussian model missing')
         if not (model/f'ckpt/chkpnt{iteration}.pth').is_file(): raise FileNotFoundError('Final checkpoint missing')
     elif part=='test':
         status=json.loads((model/f'test/iter_{iteration}/evaluation_status.json').read_text())
         if status['status']!='completed' or not status['reconstruction']: raise ValueError(status)
+        for key,expected in dict(iteration=iteration,n_train=len(meta['proj_train']),n_test=len(meta['proj_test']),
+                                 render_train=True,render_test=True).items():
+            if status.get(key)!=expected: raise ValueError(f'Evaluation {key}: {status.get(key)} != {expected}')
         array(model/f'test/iter_{iteration}/vol_pred.npy',meta['scanner']['nVoxel'])
         result['evaluation']=status
+    log.write_text(json.dumps(result,indent=2),encoding='utf-8')
+    print(json.dumps(result,indent=2),flush=True)
+    return result
+
+
+def check_projection_metrics(out, split, iteration, expected_views, log, model=None):
+    """Audit the real renderer output without imposing a convergence threshold."""
+    import numpy as np
+    import yaml
+    model=model or out/'real/model'
+    meta=json.loads((out/'real/dataset/meta_data.json').read_text())
+    count=len(meta[f'proj_{split}'])
+    if count!=expected_views or count==0:
+        raise ValueError(f'{split} view count: {count}, expected {expected_views} nonempty views')
+    path=model/f'test/iter_{iteration}/eval2d_render_{split}.yml'
+    values=yaml.safe_load(path.read_text())
+    if not isinstance(values,dict) or values.get('status')=='skipped':
+        raise ValueError(f'Missing rendered metrics: {path}')
+    result=dict(split=split,n_views=count,metrics=str(path))
+    for metric in ('psnr','ssim'):
+        scalar=np.asarray(values[f'{metric}_2d'],dtype=float)
+        per_view=np.asarray(values[f'{metric}_2d_projs'],dtype=float)
+        if scalar.shape!=() or per_view.shape!=(count,) or not np.isfinite(scalar).all() or not np.isfinite(per_view).all():
+            raise ValueError(f'{metric}: expected finite scalar and ({count},) per-view metrics in {path}')
+        result[metric]=dict(mean=float(scalar),min=float(per_view.min()),max=float(per_view.max()))
+    result['note']='Execution/integrity check only; no universal PSNR/SSIM quality threshold.'
+    log.write_text(json.dumps(result,indent=2),encoding='utf-8')
+    print(json.dumps(result,indent=2),flush=True)
+    return result
+
+
+def check_pose_artifacts(out, iterations, log):
+    """Check real learned corrections, dataset binding, gauges and CSV export."""
+    import csv
+    import numpy as np
+    import yaml
+    from types import SimpleNamespace
+    from r2_gaussian.pose.artifacts import validate_pose_file
+    from r2_gaussian.pose.parallel_pose import PARALLEL_POSE_FORMAT_VERSION
+    data=out/'real/dataset'
+    model=out/'real/model'
+    meta=json.loads((data/'meta_data.json').read_text())
+    config=yaml.safe_load((model/'init_denoise/.pipeline_train_config.yml').read_text())
+    cameras=[SimpleNamespace(image_name=Path(r['file_path']).name.split('.')[0],angle=r['angle'])
+             for r in meta['proj_train']]
+    scene=SimpleNamespace(source_path=str(data),scanner_cfg=meta['scanner'],train_cameras=cameras)
+    specs={
+        'delta_angle':('angle','angle_max_deg',.5,True),
+        'global_shift':('global_detector_shift','detector_shift_max_pixel',3.,False),
+        'view_shift':('per_view_detector_shift','detector_shift_max_pixel',3.,False),
+        'beam_tilt':('beam_tilt','beam_tilt_max_deg',.5,True),
+        'detector_roll':('detector_roll','detector_roll_max_deg',.5,True),
+    }
+    result=dict(snapshots={},note='Near-bound parameters are diagnostic, not proof of failed convergence.')
+    for iteration in iterations:
+        path=model/f'pose_calibration/iteration_{iteration}/pose_offsets.npz'
+        order=validate_pose_file(path,scene,iteration)
+        if order!=list(range(len(cameras))): raise ValueError(f'Pose snapshot view order changed: {path}')
+        with np.load(path,allow_pickle=False) as saved:
+            if int(saved['pose_format_version'])!=PARALLEL_POSE_FORMAT_VERSION:
+                raise ValueError(f'Unsupported pose convention: {path}')
+            stats={}
+            for key,(switch,limit,default,radians) in specs.items():
+                if config.get(f'parallel_optimize_{switch}',False) and key not in saved:
+                    raise ValueError(f'Enabled pose parameter {key} missing: {path}')
+                if key not in saved: continue
+                value=saved[key]
+                bound=float(config.get(f'parallel_{limit}',default))*(np.pi/180 if radians else 1.)
+                tolerance=max(1e-7,abs(bound)*1e-5)
+                if not np.isfinite(bound) or bound<0 or np.max(np.abs(value))>bound+tolerance:
+                    raise ValueError(f'{key} exceeds configured bound {bound}: {path}')
+                if key in ('delta_angle','view_shift') and np.max(np.abs(value.mean(axis=0)))>tolerance:
+                    raise ValueError(f'{key} is not zero-mean: {path}')
+                stats[key]=dict(max_abs=float(np.abs(value).max()),rms=float(np.sqrt(np.mean(value**2))),
+                                bound=bound,near_bound=int(np.count_nonzero(np.abs(value)>=.95*bound)) if bound else 0)
+            result['snapshots'][str(iteration)]=stats
+    final=iterations[-1]
+    folder=model/'pose_calibration'
+    with np.load(folder/f'iteration_{final}/pose_offsets.npz',allow_pickle=False) as snapshot, \
+         np.load(folder/'pose_offsets.npz',allow_pickle=False) as latest:
+        if set(snapshot.files)!=set(latest.files): raise ValueError('Latest pose keys differ from final snapshot')
+        for key in snapshot.files: np.testing.assert_array_equal(snapshot[key],latest[key],err_msg=key)
+        with (folder/'pose_report.csv').open(newline='',encoding='utf-8') as f:
+            rows=list(csv.DictReader(f))
+        if len(rows)!=len(cameras): raise ValueError('Pose CSV view count mismatch')
+        global_shift=snapshot['global_shift'] if 'global_shift' in snapshot else np.zeros(2)
+        view_shift=snapshot['view_shift'] if 'view_shift' in snapshot else np.zeros((len(cameras),2))
+        angles=snapshot['delta_angle'] if 'delta_angle' in snapshot else np.zeros(len(cameras))
+        beam=snapshot['beam_tilt'] if 'beam_tilt' in snapshot else np.zeros(2)
+        roll=snapshot['detector_roll'] if 'detector_roll' in snapshot else np.zeros(1)
+        for index,row in enumerate(rows):
+            if int(row['view'])!=index or row['image']!=cameras[index].image_name:
+                raise ValueError('Pose CSV view identifiers/order mismatch')
+            actual=[float(row[k]) for k in ('angle_delta_rad','shift_u_px','shift_v_px',
+                                            'beam_tilt_u_rad','beam_tilt_v_rad','detector_roll_rad')]
+            expected=[angles[index],*(global_shift+view_shift[index]),*beam,roll[0]]
+            if not np.isfinite(actual).all(): raise ValueError('Nonfinite pose CSV values')
+            np.testing.assert_allclose(actual,expected,rtol=1e-5,atol=1e-7)
+    result.update(n_views=len(cameras),csv_matches_snapshot=True,latest_matches_snapshot=True)
     log.write_text(json.dumps(result,indent=2),encoding='utf-8')
     print(json.dumps(result,indent=2),flush=True)
     return result
@@ -280,6 +419,10 @@ def main():
         a.n_train,a.n_test=cfg['fbp_n_train'],cfg['fbp_n_test']
         a.no_pose=not cfg['train_pose_enabled']
         preflight(a,a._preflight_config.parent,cfg,a._preflight_config.parent/'preflight.json')
+        return
+    if a._chunk_check_config:
+        cfg=json.loads(a._chunk_check_config.read_text())
+        check_chunked_export(cfg,a._chunk_check_config.parent)
         return
     if a.iterations<6 or a.branch_iterations<6 or min(a.n_voxel+a.highres)<8:
         raise ValueError('iterations/branch-iterations >=6; voxel/highres dimensions >=8 required')
@@ -315,6 +458,19 @@ def main():
             shutil.copy2(path,destination)
     (out/'invocation.json').write_text(json.dumps(dict(argv=sys.argv,settings=vars(a)),default=str,indent=2))
     py=[sys.executable,'-u']
+    try:
+        run_validation(r,a,out,py,config)
+    except KeyboardInterrupt:
+        return r.finish(interrupted=True)
+    except Exception as exc:
+        # Orchestration errors must also leave a final failure report.
+        def failed(log):
+            raise exc
+        r.stage('runner_error',failed)
+    return r.finish()
+
+
+def run_validation(r,a,out,py,config):
     r.command('00_preflight',py+['scripts/server_parallel_validation.py','--_preflight-config',config])
     r.command('01_real_cli_help',py+['test.py','--help'])
     r.stage('01_source_and_cli_checks',lambda log:static_checks(py,log))
@@ -328,8 +484,10 @@ def main():
         r.command('06_orientation',py+['scripts/validate_data_flow_orientation.py','--output_dir',out/'synthetic/orientation'])
         r.command('07_synthetic_pipeline',py+['scripts/smoke_pipeline_integration.py','--output_dir',out/'synthetic/pipeline'])
         r.command('08_synthetic_branches',py+['scripts/smoke_training_integration.py','--source',out/'synthetic/pipeline/parallel/dataset',
-                    '--init',out/'synthetic/pipeline/parallel/model/init_points.npy','--output_dir',out/'synthetic/training'])
-        r.command('09_auxiliary',py+['scripts/smoke_auxiliary_integration.py','--source_run',out/'synthetic/pipeline','--output_dir',out/'synthetic/auxiliary'])
+                    '--init',out/'synthetic/pipeline/parallel/model/init_points.npy','--output_dir',out/'synthetic/training'],
+                    requires=('07_synthetic_pipeline',))
+        r.command('09_auxiliary',py+['scripts/smoke_auxiliary_integration.py','--source_run',out/'synthetic/pipeline','--output_dir',out/'synthetic/auxiliary'],
+                    requires=('07_synthetic_pipeline',))
         if a.skip_cone: r.skip('10_cone_geometry','--skip-cone selected; synthetic pipeline still exercises its cone branch')
         else: r.command('10_cone_geometry',py+['scripts/smoke_cone_geometry.py','--output_dir',out/'synthetic/cone'])
     if a.upstream:
@@ -342,32 +500,55 @@ def main():
     # center/FBP/init run together; their artifacts are then checked separately.
     r.command('20_center_fbp_init',pipeline+['--stop_after','init'])
     for index,part in ((20,'fbp'),(21,'init')):
-        r.stage(f'{index}_{part}_artifacts',lambda log,part=part:check_real(out,part,a.iterations,log))
+        r.stage(f'{index}_{part}_artifacts',lambda log,part=part:check_real(out,part,a.iterations,log),
+                requires=('20_center_fbp_init',))
     for index,part in ((22,'train'),(23,'test')):
-        r.command(f'{index}_{part}',pipeline+['--stop_after',part,'--resume'])
-        r.stage(f'{index}_{part}_artifacts',lambda log,part=part:check_real(out,part,a.iterations,log))
-    r.command('24_resume_once',pipeline+['--resume'])
-    r.command('25_resume_twice',pipeline+['--resume'])
-    r.stage('25_cache_and_resume_safety',lambda log:check_cache_resume(a,out,config,log))
+        requires=('20_fbp_artifacts','21_init_artifacts') if part=='train' else ('22_train_artifacts',)
+        r.command(f'{index}_{part}',pipeline+['--stop_after',part,'--resume'],requires=requires)
+        r.stage(f'{index}_{part}_artifacts',lambda log,part=part:check_real(out,part,a.iterations,log),
+                requires=(f'{index}_{part}',))
+    r.stage('23_train_projection_metrics',lambda log:check_projection_metrics(out,'train',a.iterations,a.n_train,log),
+            requires=('23_test',))
+    if a.n_test:
+        r.stage('23_heldout_projection_metrics',lambda log:check_projection_metrics(out,'test',a.iterations,a.n_test,log),
+                requires=('23_test',))
+    else:
+        r.skip('23_heldout_projection_metrics','--n-test=0: no held-out projection quality evidence')
+    if a.no_pose:
+        r.skip('23_pose_artifacts','--no-pose explicitly selected')
+    else:
+        r.stage('23_pose_artifacts',lambda log:check_pose_artifacts(out,[max(2,a.iterations//2),a.iterations],log),
+                requires=('22_train',))
+    r.command('24_resume_once',pipeline+['--resume'],requires=('23_test',))
+    r.command('25_resume_twice',pipeline+['--resume'],requires=('24_resume_once',))
+    r.stage('25_cache_and_resume_safety',lambda log:check_cache_resume(a,out,config,log),requires=('25_resume_twice',))
     if a.skip_real_branches:
         r.skip('real_side_branches','--skip-real-branches explicitly selected')
     else:
         run_real_branches(r,a,out,py)
     r.command('30_highres',py+['export_highres.py','-s',out/'real/dataset','-m',out/'real/model',
                '--iteration',a.iterations,'--resolution',*a.highres,'--chunk_size',64,64,64,
-               '--output',out/'real/highres/vol_pred.npy']+([] if a.no_pose else ['--pose_enabled']))
-    r.stage('31_highres_and_mask',lambda log:check_highres_mask(out,py,log))
-    r.results.update(status='completed',finished=dt.datetime.now().astimezone().isoformat(),
-                     note='Smoke validation only; metrics against FBP are not independent ground truth.')
-    r.save()
-    print(f'\nCOMPLETE: {out}/summary.tsv\nMain model: {out}/real/model\nHighres: {out}/real/highres',flush=True)
+               '--output',out/'real/highres/vol_pred.npy']+([] if a.no_pose else ['--pose_enabled']),
+               requires=('22_train_artifacts',))
+    r.stage('31_highres_and_mask',lambda log:check_highres_mask(out,py,log),requires=('30_highres',))
+    r.command('32_real_chunk_consistency',py+['scripts/server_parallel_validation.py','--_chunk-check-config',config],
+              requires=('30_highres',))
 
 
-def run_real_branches(r,a,out,py):
-    """Use real projections, while keeping incompatible options in separate models."""
+def prepare_real_branches(a,out,log):
+    """Keep preparation inside a stage so missing config cannot abort the suite."""
     import yaml
-    # Fully resolved training config records physical scale and model/data paths.
-    base=yaml.safe_load((out/'real/model/init_denoise/.pipeline_train_config.yml').read_text())
+    base_path=out/'real/model/init_denoise/.pipeline_train_config.yml'
+    if not base_path.is_file():
+        # The pipeline writes this file only when entering train. Independent
+        # branches must also work when that stage was skipped or failed early.
+        import run_pipeline as pipeline
+        args=pipeline.resolve_args(pipeline.build_parser().parse_args([
+            '--pipeline_config',str(out/'pipeline.json'),'--train_config',str(a.train_config)]))
+        base_path=out/'real_branches_base.yaml'
+        pipeline.write_train_config(args,base_path,out/'real/dataset',out/'real/model',
+                                    out/'real/model/init_denoise/init_points.npy')
+    base=yaml.safe_load(base_path.read_text())
     n=a.branch_iterations
     for name in ('ordinary','sparse'):
         config=dict(base,model_path=str(out/'real_branches'/name),iterations=n,pose_enabled=False,
@@ -378,16 +559,39 @@ def run_real_branches(r,a,out,py):
                 slice_end_iter=n,slice_interval=1,slice_max_points=1024,slice_filter_ratio=10.,lambda_slice=.01)
         path=out/f'{name}_train.yaml'
         path.write_text(yaml.safe_dump(config),encoding='utf-8')
-        r.command(f'26_real_{name}',py+['train.py','--config',path])
-        r.command(f'26_real_{name}_evaluation',py+['test.py','-s',out/'real/dataset','-m',out/'real_branches'/name,'--iteration',n])
     # Resume the main pose/ordinary checkpoint in an independent model directory.
     resume=dict(base,model_path=str(out/'real_branches/resume'),iterations=a.iterations+2,
                 test_iterations=[a.iterations+2],save_iterations=[a.iterations+2],
                 checkpoint_iterations=[a.iterations+2],start_checkpoint=str(out/f'real/model/ckpt/chkpnt{a.iterations}.pth'))
     path=out/'checkpoint_resume.yaml'
     path.write_text(yaml.safe_dump(resume),encoding='utf-8')
-    r.command('27_real_checkpoint_resume',py+['train.py','--config',path])
-    r.command('28_real_resume_evaluation',py+['test.py','-s',out/'real/dataset','-m',out/'real_branches/resume','--iteration',a.iterations+2])
+    result=dict(ordinary=str(out/'ordinary_train.yaml'),sparse=str(out/'sparse_train.yaml'),resume=str(path))
+    log.write_text(json.dumps(result,indent=2),encoding='utf-8')
+    return result
+
+
+def run_real_branches(r,a,out,py):
+    """Independent real-data branches can still run when the main train fails."""
+    r.stage('26_prepare_real_branches',lambda log:prepare_real_branches(a,out,log),requires=('21_init_artifacts',))
+    for name in ('ordinary','sparse','resume'):
+        n=a.iterations+2 if name=='resume' else a.branch_iterations
+        train='27_real_checkpoint_resume' if name=='resume' else f'26_real_{name}'
+        evaluation='28_real_resume_evaluation' if name=='resume' else f'26_real_{name}_evaluation'
+        path=out/('checkpoint_resume.yaml' if name=='resume' else f'{name}_train.yaml')
+        model=out/'real_branches'/name
+        requires=('26_prepare_real_branches','22_train_artifacts') if name=='resume' else ('26_prepare_real_branches',)
+        r.command(train,py+['train.py','--config',path],requires=requires)
+        r.stage(train+'_artifacts',lambda log,n=n,model=model:check_real(out,'train',n,log,model=model),requires=(train,))
+        r.command(evaluation,py+['test.py','-s',out/'real/dataset','-m',model,'--iteration',n],
+                  requires=(train+'_artifacts',))
+        r.stage(evaluation+'_artifacts',lambda log,n=n,model=model:check_real(out,'test',n,log,model=model),requires=(evaluation,))
+        for split,count in (('train',a.n_train),('test',a.n_test)):
+            stage=evaluation+f'_{split}_metrics'
+            if count:
+                r.stage(stage,lambda log,split=split,count=count,n=n,model=model:
+                        check_projection_metrics(out,split,n,count,log,model=model),requires=(evaluation,))
+            else:
+                r.skip(stage,'--n-test=0: no held-out projections')
 
 
 def static_checks(py,log):
@@ -471,5 +675,57 @@ def check_highres_mask(out,py,log):
                 note='Generated box is a coordinate test, not a sample segmentation.')
 
 
+def check_chunked_export(cfg,out):
+    """Requery small windows of the real model on the exported global grid.
+
+    A separate process isolates CUDA state. Windows cross chunk boundaries and
+    include partial final tiles without repeating a full high-resolution export.
+    """
+    import numpy as np
+    import torch
+    from types import SimpleNamespace
+    from export_highres import load_scanner_config
+    from r2_gaussian.gaussian import GaussianModel, initialize_gaussian, query
+    folder=out/'real/highres'
+    metadata=json.loads((folder/'vol_pred.json').read_text())
+    if metadata['iteration']!=cfg['train_iterations'] or metadata['pose_enabled']!=cfg['train_pose_enabled']:
+        raise ValueError('High-resolution export iteration/backend does not match this run')
+    volume=np.load(folder/'vol_pred.npy',mmap_mode='r')
+    shape=np.asarray(volume.shape,dtype=int)
+    if list(volume.shape)!=metadata['shape_xyz']: raise ValueError('Export shape differs from sidecar')
+    scanner,_=load_scanner_config(cfg['output_dir'])
+    size=np.asarray(scanner['sVoxel'],dtype=float)
+    center=np.asarray(scanner['offOrigin'],dtype=float)
+    spacing=size/shape
+    chunks=np.asarray(metadata['query_chunk_size_xyz'],dtype=int)
+    boundary=(shape//2//chunks)*chunks
+    boundary=np.where((boundary==0)&(chunks<shape),chunks,boundary)
+    starts=[np.zeros(3,dtype=int),np.maximum(0,boundary-8),np.maximum(0,((shape-17)//8)*8)]
+    model=GaussianModel(None)
+    initialize_gaussian(model,SimpleNamespace(model_path=cfg['model_path']),cfg['train_iterations'])
+    pipe=SimpleNamespace(pose_enabled=cfg['train_pose_enabled'],compute_cov3D_python=False,debug=False)
+    result=dict(rtol=5e-5,atol=5e-6,windows=[])
+    for label,lower in zip(('first_tiles','chunk_seams','last_partial_tiles'),starts):
+        upper=np.minimum(shape,lower+24) if label!='last_partial_tiles' else shape
+        count=upper-lower
+        local_center=center-size/2+(lower+count/2)*spacing
+        with torch.inference_mode():
+            reference=query(model,local_center.tolist(),count.tolist(),(count*spacing).tolist(),pipe)['vol'].cpu().numpy()
+        actual=np.asarray(volume[tuple(slice(int(lo),int(hi)) for lo,hi in zip(lower,upper))])
+        if reference.shape!=actual.shape or not np.isfinite(reference).all() or not np.isfinite(actual).all():
+            raise ValueError(f'Nonfinite values or wrong query shape in {label}')
+        difference=np.abs(actual-reference)
+        bad=int(np.count_nonzero(~np.isclose(actual,reference,rtol=result['rtol'],atol=result['atol'])))
+        report=dict(window=label,start=lower.tolist(),stop=upper.tolist(),max_abs_error=float(difference.max()),
+                    relative_l1_error=float(difference.sum()/max(float(np.abs(reference).sum()),1e-30)),
+                    mismatched_voxels=bad,voxels=int(actual.size))
+        result['windows'].append(report)
+        print(json.dumps(report),flush=True)
+    (folder/'chunk_consistency.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
+    if any(w['mismatched_voxels'] for w in result['windows']):
+        raise AssertionError('Real model chunk export differs from direct queries; see chunk_consistency.json')
+    return result
+
+
 if __name__=='__main__':
-    main()
+    sys.exit(main())

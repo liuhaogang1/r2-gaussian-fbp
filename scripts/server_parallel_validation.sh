@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Activate the server Conda environment first. All arguments go to the runner.
+# The runner continues independent stages after failures and exits nonzero only
+# after printing failed/skipped stages and writing summary.json/tsv + report.txt.
 set -euo pipefail
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
