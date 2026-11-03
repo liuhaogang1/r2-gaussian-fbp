@@ -9,9 +9,14 @@ import numpy as np
 
 
 def tigre_detector_offset(offset):
-    """Project [U,V] offsets to TIGRE [V,U] before saved-row reversal."""
+    """Map detector [U,V] offsets to TIGRE's [U,-V] convention.
+
+    TIGRE's first offset component shifts the horizontal detector axis, while
+    its second component shifts the vertical axis before saved-row reversal.
+    The vertical sign is inverted because saved projection rows grow down.
+    """
     u, v = offset
-    return np.asarray([-v, u], dtype=np.float32)
+    return np.asarray([u, -v], dtype=np.float32)
 
 
 def parallel_detector_half_extents(scanner):
