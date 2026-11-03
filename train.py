@@ -496,7 +496,8 @@ def training(
     pose_checkpoint_state = None
     pose_optimizer_checkpoint_state = None
     if checkpoint is not None:
-        checkpoint_data = torch.load(checkpoint)
+        from r2_gaussian.utils.artifact_utils import load_training_checkpoint
+        checkpoint_data = load_training_checkpoint(checkpoint)
         if len(checkpoint_data) == 2:
             model_params, first_iter = checkpoint_data
         elif len(checkpoint_data) == 5:

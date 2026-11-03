@@ -8,6 +8,18 @@ import tempfile
 import numpy as np
 
 
+def load_training_checkpoint(path):
+    """Load a trusted, locally generated full training checkpoint.
+
+    Gaussian state includes NumPy scalars/arrays and optimizer state, while
+    pose checkpoints also carry dataset binding metadata. These are not plain
+    tensor weights. Explicitly retain full loading across PyTorch versions;
+    only use this loader for checkpoints from a trusted source.
+    """
+    import torch
+    return torch.load(path, weights_only=False)
+
+
 def file_identity(path):
     path = Path(path).resolve()
     digest = hashlib.sha256()
