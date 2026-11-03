@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,31 @@ STAGES = ("center", "fbp", "init", "train", "test")
 DENOISE_DEFAULTS = {
     "init_denoise": False, "init_denoise_sigma": 0.8,
     "init_denoise_output_dir": None, "init_denoise_save_nii": False,
+}
+
+# Keep new opt-in parameters out of resolved legacy arguments/manifests unless
+# a user explicitly configures the feature. This preserves pinned old defaults.
+SHAPE_DEFAULTS = {
+    "train_shape_enabled": False,
+    "train_shape_needle_enabled": False,
+    "train_shape_sheet_enabled": False,
+    "train_shape_needle_threshold": 10.0,
+    "train_shape_sheet_threshold": 10.0,
+    "train_lambda_shape_needle": 0.0,
+    "train_lambda_shape_sheet": 0.0,
+    "train_shape_start_iter": 500,
+    "train_shape_end_iter": 15000,
+    "train_shape_ramp_iters": 1000,
+    "train_shape_check_interval": 100,
+    "train_shape_patience": 3,
+    "train_shape_hard_needle_ratio": 50.0,
+    "train_shape_hard_sheet_ratio": 50.0,
+    "train_shape_hard_action": "none",
+    "train_shape_low_density_threshold": 0.0,
+    "train_shape_low_mass_threshold": 0.0,
+    "train_shape_repair_max_density_gain": 4.0,
+    "train_shape_split_count": 2,
+    "train_shape_max_hard_actions_per_check": 32,
 }
 
 
@@ -133,6 +159,7 @@ DEFAULTS: dict[str, Any] = {
     "fbp_DSD": 7.0,
     "fbp_DSO": 5.0,
     "fbp_pixel_size": 0.02,
+    "fbp_pixel_size_kind": None,
     "fbp_accuracy": 0.5,
     "fbp_filter": "hann",
     # Initialization
@@ -270,6 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         argument_default=argparse.SUPPRESS,
     )
+    _add(parser, "--fbp_pixel_size_kind", dest="fbp_pixel_size_kind", choices=["axis", "detector"])
     _add(parser, "--stripe_correction", "--fbp_stripe_correction", dest="stripe_correction",
          nargs="?", const={}, type=json.loads,
          help="Opt-in TomoPy remove_all_stripe JSON object; null disables correction.")
@@ -442,6 +470,15 @@ def build_parser() -> argparse.ArgumentParser:
         ("densify_from_iter", int), ("densify_until_iter", int), ("densify_grad_threshold", float),
         ("densify_scale_threshold", float), ("max_screen_size", float), ("max_scale", float),
         ("max_num_gaussians", int), ("slice_loss_enabled", bool),
+        ("shape_enabled", bool), ("shape_needle_enabled", bool), ("shape_sheet_enabled", bool),
+        ("shape_needle_threshold", float), ("shape_sheet_threshold", float),
+        ("lambda_shape_needle", float), ("lambda_shape_sheet", float),
+        ("shape_start_iter", int), ("shape_end_iter", int), ("shape_ramp_iters", int),
+        ("shape_check_interval", int), ("shape_patience", int),
+        ("shape_hard_needle_ratio", float), ("shape_hard_sheet_ratio", float),
+        ("shape_hard_action", str), ("shape_low_density_threshold", float),
+        ("shape_low_mass_threshold", float), ("shape_repair_max_density_gain", float),
+        ("shape_split_count", int), ("shape_max_hard_actions_per_check", int),
         ("slice_reference_path", Path), ("slice_axis", str),
         ("slice_start_iter", int), ("slice_end_iter", int),
         ("slice_interval", int), ("slice_filter_threshold", float),
@@ -504,6 +541,8 @@ def _config_key(section: str | None, key: str) -> str:
         return key if key.startswith(prefix) else prefix + key
     if section in {"paths", "global", "pipeline"}:
         return key
+    if section is None and key in DEFAULTS:
+        return key
     if section is None and ("train_" + key) in DEFAULTS:
         return "train_" + key
     aliases = {
@@ -538,12 +577,15 @@ def flatten_config(data: dict[str, Any], legacy_train: bool = False) -> dict[str
                 else:
                     result[_config_key(section_name, str(key))] = value
         else:
-            section_name = None
+            section_name = "train" if legacy_train else None
             result[_config_key(section_name, str(section))] = values
     return result
 
 
 def load_yaml(path: Path, legacy_train: bool = False) -> dict[str, Any]:
+    if legacy_train:
+        from r2_gaussian.utils.cfg_utils import load_config
+        return flatten_config(load_config(str(path)), legacy_train=True)
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     return flatten_config(data, legacy_train=legacy_train)
@@ -553,7 +595,7 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
     values = dict(DEFAULTS)
 
     def merge_loaded(loaded: dict[str, Any], source: Path) -> None:
-        unknown = sorted(set(loaded) - set(DEFAULTS) - set(DENOISE_DEFAULTS) - {
+        unknown = sorted(set(loaded) - set(DEFAULTS) - set(DENOISE_DEFAULTS) - set(SHAPE_DEFAULTS) - {
             "stripe_correction", "stripe_ncore", "stripe_row_chunk"})
         if unknown:
             raise ValueError(f"Unknown keys in {source}: {', '.join(unknown)}")
@@ -742,6 +784,7 @@ def build_fbp_command(args: argparse.Namespace, center_json: Path | None, manual
         if name == "fbp_sVoxel" and getattr(args, "fbp_sVoxel_requested", None) == "auto":
             value = "auto"
         add_option(command, flag, value)
+    add_option(command, "--pixel_size_kind", args.fbp_pixel_size_kind)
     add_option(command, "--seed", args.seed)
     add_option(command, "--free_ray", args.fbp_free_ray)
     add_bool(command, "--flat_field", args.fbp_flat_field)
@@ -801,6 +844,13 @@ def write_train_config(args: argparse.Namespace, path: Path, source: Path, model
         "lambda_dssim", "lambda_tv", "tv_vol_size", "density_min_threshold",
         "densification_interval", "densify_from_iter", "densify_until_iter", "densify_grad_threshold",
         "densify_scale_threshold", "max_screen_size", "max_scale", "max_num_gaussians",
+        "shape_enabled", "shape_needle_enabled", "shape_sheet_enabled",
+        "shape_needle_threshold", "shape_sheet_threshold", "lambda_shape_needle",
+        "lambda_shape_sheet", "shape_start_iter", "shape_end_iter", "shape_ramp_iters",
+        "shape_check_interval", "shape_patience", "shape_hard_needle_ratio",
+        "shape_hard_sheet_ratio", "shape_hard_action", "shape_low_density_threshold",
+        "shape_low_mass_threshold", "shape_repair_max_density_gain", "shape_split_count",
+        "shape_max_hard_actions_per_check",
         "slice_loss_enabled", "slice_reference_path", "slice_axis",
         "slice_start_iter", "slice_end_iter", "slice_interval",
         "slice_filter_threshold", "slice_filter_ratio", "slice_max_points",
@@ -828,7 +878,7 @@ def write_train_config(args: argparse.Namespace, path: Path, source: Path, model
         elif name == "quiet":
             value = args.train_quiet
         else:
-            value = getattr(args, "train_" + name)
+            value = getattr(args, "train_" + name, SHAPE_DEFAULTS.get("train_" + name))
         if value is not None:
             values[name] = _jsonable(value)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -849,21 +899,30 @@ def build_train_command(args: argparse.Namespace, init_output: Path, train_confi
         "scaling_lr_init", "scaling_lr_final", "scaling_lr_max_steps", "rotation_lr_init",
         "rotation_lr_final", "rotation_lr_max_steps", "lambda_dssim", "lambda_tv", "tv_vol_size",
         "density_min_threshold", "densification_interval", "densify_from_iter", "densify_until_iter",
-        "densify_grad_threshold", "densify_scale_threshold", "max_screen_size", "max_scale",
+        "densify_grad_threshold", "densify_scale_threshold",
         "max_num_gaussians", "slice_reference_path", "slice_axis", "slice_start_iter",
         "slice_end_iter", "slice_interval", "slice_filter_threshold",
         "slice_filter_ratio", "slice_max_points", "slice_query_chunk_size",
         "lambda_slice", "slice_seed", "pose_mode", "parallel_angle_max_deg", "parallel_detector_shift_max_pixel",
         "parallel_beam_tilt_max_deg", "parallel_detector_roll_max_deg", "pose_lr", "pose_lambda_smooth",
         "pose_lambda_magnitude",
+        "shape_needle_threshold", "shape_sheet_threshold", "lambda_shape_needle",
+        "lambda_shape_sheet", "shape_start_iter", "shape_end_iter", "shape_ramp_iters",
+        "shape_check_interval", "shape_patience", "shape_hard_needle_ratio",
+        "shape_hard_sheet_ratio", "shape_hard_action", "shape_low_density_threshold",
+        "shape_low_mass_threshold", "shape_repair_max_density_gain", "shape_split_count",
+        "shape_max_hard_actions_per_check",
     )
     for name in scalar_names:
-        add_option(command, "--" + name, getattr(args, "train_" + name))
-    for name in ("compute_cov3D_python", "debug", "slice_loss_enabled", "pose_enabled", "parallel_optimize_angle",
+        value = getattr(args, "train_" + name, SHAPE_DEFAULTS.get("train_" + name))
+        add_option(command, "--" + name, value)
+    for name in ("compute_cov3D_python", "debug", "slice_loss_enabled", "shape_enabled",
+                 "shape_needle_enabled", "shape_sheet_enabled", "pose_enabled", "parallel_optimize_angle",
                  "parallel_optimize_global_detector_shift", "parallel_optimize_per_view_detector_shift",
                  "parallel_optimize_beam_tilt", "parallel_optimize_detector_roll",
                  "cone_optimize_translation", "cone_optimize_quaternion", "detect_anomaly", "quiet"):
-        add_bool(command, "--" + name, getattr(args, "train_" + name))
+        value = getattr(args, "train_" + name, SHAPE_DEFAULTS.get("train_" + name, False))
+        add_bool(command, "--" + name, value)
     for name, flag in (("train_test_iterations", "--test_iterations"), ("train_save_iterations", "--save_iterations"),
                        ("train_checkpoint_iterations", "--checkpoint_iterations")):
         values = getattr(args, name)
@@ -874,8 +933,8 @@ def build_train_command(args: argparse.Namespace, init_output: Path, train_confi
 
 
 def build_test_command(args: argparse.Namespace, pose_result: Path | None) -> list[str]:
-    source = args.test_source_path or args.output_dir
-    model = args.test_model_path or args.model_path
+    source = args.test_source_path or args.train_source_path or args.output_dir
+    model = args.test_model_path or args.train_model_path or args.model_path
     command = [sys.executable, str(ROOT / "test.py"), "-s", str(source), "-m", str(model)]
     add_option(command, "--iteration", args.test_iteration)
     for name in ("data_device", "ply_path", "scale_min", "scale_max"):
@@ -909,6 +968,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("fbp_recon_pixel_subsample must be at least 1")
     if args.fbp_mode == "cone" and args.fbp_DSD <= args.fbp_DSO:
         raise ValueError("fbp_mode=cone requires fbp_DSD > fbp_DSO")
+    if args.fbp_mode == "cone" and args.fbp_pixel_size_kind not in {"axis", "detector"}:
+        raise ValueError("fbp_mode=cone requires explicit --fbp_pixel_size_kind axis or detector")
     if args.center_search_min_px >= args.center_search_max_px:
         raise ValueError("center_search_min_px must be smaller than center_search_max_px")
     if args.center_pair_min_offset_px >= args.center_pair_max_offset_px:
@@ -937,6 +998,29 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("train_pose_mode must be auto, parallel, or cone")
     if args.train_pose_enabled and args.train_pose_mode != "auto" and args.train_pose_mode != args.fbp_mode:
         raise ValueError("train_pose_mode must match fbp_mode when pose calibration is enabled")
+    shape = lambda name: getattr(args, "train_shape_" + name, SHAPE_DEFAULTS["train_shape_" + name])
+    if shape("enabled"):
+        if not (getattr(args, "train_shape_needle_enabled", SHAPE_DEFAULTS["train_shape_needle_enabled"])
+                or getattr(args, "train_shape_sheet_enabled", SHAPE_DEFAULTS["train_shape_sheet_enabled"])):
+            raise ValueError("Enable train_shape_needle_enabled or train_shape_sheet_enabled")
+        for name in ("needle_threshold", "sheet_threshold", "hard_needle_ratio", "hard_sheet_ratio"):
+            value = float(shape(name))
+            if not (value > 1.0):
+                raise ValueError(f"train_shape_{name} must be greater than 1")
+        for name in ("lambda_shape_needle", "lambda_shape_sheet", "shape_low_density_threshold", "shape_low_mass_threshold"):
+            value = float(getattr(args, "train_" + name, 0.0))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"train_{name} must be finite and non-negative")
+        if shape("ramp_iters") < 0 or shape("max_hard_actions_per_check") < 1:
+            raise ValueError("shape ramp must be non-negative and max hard actions positive")
+        if shape("repair_max_density_gain") < 1.0:
+            raise ValueError("train_shape_repair_max_density_gain must be at least 1")
+        if shape("end_iter") < shape("start_iter"):
+            raise ValueError("train_shape_end_iter must be >= train_shape_start_iter")
+        if shape("check_interval") < 1 or shape("patience") < 1 or shape("split_count") < 2:
+            raise ValueError("shape check interval/patience must be positive and split count >= 2")
+        if shape("hard_action") not in {"none", "prune_low", "repair", "split", "auto"}:
+            raise ValueError("train_shape_hard_action must be none, prune_low, repair, split, or auto")
     if args.train_slice_loss_enabled:
         if args.train_pose_enabled:
             raise ValueError("train_slice_loss_enabled cannot be combined with train_pose_enabled")
@@ -984,7 +1068,8 @@ def main(args: argparse.Namespace) -> None:
     args.model_path = Path(args.model_path).resolve()
     if args.fbp_sVoxel == "auto":
         resolve_pipeline_svoxel(args)
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    if not args.dry_run:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.fbp_preprocess_only and stage_in_window(args, "init"):
         raise ValueError("fbp_preprocess_only requires stop_after=fbp or skipping init/train/test")
     denoise_enabled = bool(getattr(args, "init_denoise", False))
@@ -1002,6 +1087,8 @@ def main(args: argparse.Namespace) -> None:
         init_output = (args.init_output or args.output_dir / ("init_" + args.output_dir.name + ".npy")).resolve()
     center_output = Path(args.center_output).resolve()
     args.center_output = center_output
+    from r2_gaussian.utils.artifact_utils import npy_path
+    init_output = npy_path(init_output)
     args.init_output = init_output
 
     if args.init_source == "custom" and args.init_volume is not None:
@@ -1015,6 +1102,7 @@ def main(args: argparse.Namespace) -> None:
         "resolved_arguments": vars(args),
         "stage_commands": {},
         "stage_status": {stage: "pending" for stage in STAGES},
+        "stage_records": {},
         "center_output": center_output,
         "init_output": init_output,
     }
@@ -1043,6 +1131,8 @@ def main(args: argparse.Namespace) -> None:
         from scripts.stripe_correction import dataset_metadata
         dataset_metadata(args.output_dir, args.stripe_correction)
     def save() -> None:
+        if args.dry_run:
+            return
         manifest["resolved_arguments"] = vars(args)
         if denoise_enabled and manifest["stage_status"]["init"] in {"success", "resumed"}:
             from scripts.init_denoise import file_digest
@@ -1052,16 +1142,18 @@ def main(args: argparse.Namespace) -> None:
     def run_stage(stage: str, stage_command: list[str]) -> None:
         manifest["stage_commands"][stage] = stage_command
         previous_status = previous.get("stage_status", {}).get(stage)
-        if args.resume and (previous_status == "success" or (denoise_enabled and previous_status == "resumed")):
-            manifest["stage_status"][stage] = "resumed"
-            print(f"[{stage}] resume: previous success retained", flush=True)
-            if stage not in {"center", "fbp"}:
-                save()
-            return
+        from scripts.pipeline_artifacts import signature, capture, validate
         if args.dry_run:
             manifest["stage_status"][stage] = "planned"
             print("[dry-run]", " ".join(str(item) for item in stage_command), flush=True)
-            save()
+            return
+        current_signature = signature(args, stage, stage_command)
+        if args.resume and previous_status in {"success", "resumed"}:
+            record = previous.get("stage_records", {}).get(stage)
+            validate(record, current_signature, stage)
+            manifest["stage_records"][stage] = record
+            manifest["stage_status"][stage] = "resumed"
+            print(f"[{stage}] resume: previous success retained", flush=True)
             return
         manifest["stage_status"][stage] = "running"
         # prepare_fbp_tiff.py requires a fresh output directory. Do not write
@@ -1077,6 +1169,7 @@ def main(args: argparse.Namespace) -> None:
                 save()
             raise
         manifest["stage_status"][stage] = "success"
+        manifest["stage_records"][stage] = capture(args, stage, current_signature)
         if stage != "center":
             save()
 
@@ -1122,7 +1215,8 @@ def main(args: argparse.Namespace) -> None:
         train_model = Path(args.train_model_path or args.model_path).resolve()
         train_config_path = ((args.init_denoise_output_dir if denoise_enabled else args.output_dir)
                              / ".pipeline_train_config.yml")
-        write_train_config(args, train_config_path, train_source, train_model, Path(args.train_ply_path or init_output).resolve())
+        if not args.dry_run:
+            write_train_config(args, train_config_path, train_source, train_model, Path(args.train_ply_path or init_output).resolve())
         run_stage("train", build_train_command(args, init_output, train_config_path))
     else:
         manifest["stage_status"]["train"] = "skipped"
@@ -1131,9 +1225,11 @@ def main(args: argparse.Namespace) -> None:
     if test_stage:
         pose_result = args.test_pose_result.resolve() if args.test_pose_result is not None else None
         if pose_result is None and args.train_pose_enabled:
-            pose_model_root = Path(args.train_model_path or args.model_path).resolve()
-            candidate = pose_model_root / "pose_calibration" / "pose_offsets.npz"
-            if candidate.exists() or args.dry_run:
+            pose_model_root = Path(args.test_model_path or args.train_model_path or args.model_path).resolve()
+            candidate = pose_model_root / "pose_calibration" / (
+                f"iteration_{args.test_iteration}" if args.test_iteration >= 0 else ""
+            ) / "pose_offsets.npz"
+            if args.test_iteration >= 0 and (candidate.exists() or args.dry_run):
                 pose_result = candidate
         if pose_result is not None and not args.dry_run and not pose_result.exists():
             raise FileNotFoundError(f"Pose result not found: {pose_result}")
@@ -1142,7 +1238,9 @@ def main(args: argparse.Namespace) -> None:
     else:
         manifest["stage_status"]["test"] = "skipped"
     fbp_completed = manifest["stage_status"]["fbp"] in {"success", "resumed"}
-    if args.dry_run or fbp_completed or any(args.output_dir.iterdir()):
+    if args.dry_run:
+        print("Dry run complete: no files were written.")
+    elif fbp_completed or (args.output_dir.exists() and any(args.output_dir.iterdir())):
         save()
         print(f"Pipeline manifest: {manifest_path}")
     else:

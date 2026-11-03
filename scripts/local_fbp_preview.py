@@ -12,42 +12,25 @@ SimpleITK or nibabel.
 from __future__ import annotations
 
 import argparse
-import gzip
-import struct
+import json
+import sys
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw
 from scipy.ndimage import gaussian_filter, label
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from r2_gaussian.utils.volume_export_utils import save_nifti_xyz, volume_geometry
 
-def write_nifti(path: Path, volume: np.ndarray, spacing: tuple[float, float, float]) -> None:
-    # NIfTI stores x as the fastest-changing axis.  The project volumes are
-    # [X, Y, Z], so serialize a [Z, Y, X] view in C order.
-    vol = np.asarray(volume, dtype=np.float32)
-    if vol.ndim != 3:
-        raise ValueError(f"Expected a 3D volume, got {vol.shape}")
-    arr = np.ascontiguousarray(vol.transpose(2, 1, 0))
-    nx, ny, nz = vol.shape
-    header = bytearray(348)
-    struct.pack_into("<i", header, 0, 348)
-    struct.pack_into("<8h", header, 40, 3, nx, ny, nz, 1, 1, 1, 1)
-    struct.pack_into("<h", header, 70, 16)  # float32
-    struct.pack_into("<h", header, 72, 32)
-    struct.pack_into("<8f", header, 76, 1.0, spacing[0], spacing[1], spacing[2], 1.0, 0.0, 0.0, 0.0)
-    struct.pack_into("<f", header, 108, 352.0)
-    struct.pack_into("<f", header, 112, 1.0)
-    struct.pack_into("<f", header, 116, 0.0)
-    struct.pack_into("<h", header, 252, 1)  # qform_code
-    struct.pack_into("<h", header, 254, 1)  # sform_code
-    struct.pack_into("<4f", header, 280, spacing[0], 0.0, 0.0, 0.0)
-    struct.pack_into("<4f", header, 296, 0.0, spacing[1], 0.0, 0.0)
-    struct.pack_into("<4f", header, 312, 0.0, 0.0, spacing[2], 0.0)
-    header[344:348] = b"n+1\0"
-    with gzip.open(path, "wb") as handle:
-        handle.write(header)
-        handle.write(b"\0\0\0\0")
-        handle.write(arr.tobytes(order="C"))
+
+def write_nifti(path: Path, volume: np.ndarray, spacing: tuple[float, float, float],
+                origin=None) -> None:
+    # Use the shared XYZ/LPS convention, with a centered grid when no origin
+    # is supplied. Only one plane is materialized by the streaming writer.
+    size = np.asarray(spacing) * np.asarray(volume.shape)
+    center = np.zeros(3) if origin is None else np.asarray(origin) + size / 2 - np.asarray(spacing) / 2
+    save_nifti_xyz(volume, {"sVoxel": size, "offOrigin": center}, path)
 
 
 def norm_image(slice2d: np.ndarray, lo: float, hi: float) -> Image.Image:
@@ -87,7 +70,9 @@ def main() -> None:
     parser.add_argument("--sigma", type=float, default=0.8)
     parser.add_argument("--threshold", type=float, default=0.10)
     parser.add_argument("--min_component", type=int, default=64)
-    parser.add_argument("--spacing", nargs=3, type=float, default=[1.0, 1.0, 1.0])
+    parser.add_argument("--spacing", nargs=3, type=float, default=None)
+    parser.add_argument("--metadata", type=Path, help="Scanner meta_data.json; defaults beside input")
+    parser.add_argument("--off_origin", nargs=3, type=float, default=None, help="XYZ grid center with --spacing")
     args = parser.parse_args()
 
     args.output.mkdir(parents=True, exist_ok=True)
@@ -96,6 +81,20 @@ def main() -> None:
         raise ValueError(f"Expected a 3D npy volume, got {raw.shape}")
     raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
     raw = np.maximum(raw, 0.0)
+    metadata_path = args.metadata or args.input.parent / "meta_data.json"
+    if args.metadata is not None and not metadata_path.exists():
+        raise FileNotFoundError(metadata_path)
+    if args.spacing is None and metadata_path.exists():
+        scanner = json.loads(metadata_path.read_text(encoding="utf-8"))["scanner"]
+        if tuple(scanner.get("nVoxel", raw.shape)) != raw.shape:
+            raise ValueError("Input shape differs from scanner.nVoxel")
+        if args.off_origin is not None:
+            raise ValueError("--off_origin requires --spacing")
+    else:
+        spacing = np.asarray(args.spacing if args.spacing is not None else [1., 1., 1.])
+        scanner = {"sVoxel": spacing * raw.shape,
+                   "offOrigin": args.off_origin if args.off_origin is not None else [0, 0, 0]}
+    spacing, origin = volume_geometry(raw.shape, scanner)
 
     # Scheme 1: light denoising only, with the same coordinate grid.
     denoised = gaussian_filter(raw, sigma=float(args.sigma), mode="nearest")
@@ -120,9 +119,8 @@ def main() -> None:
     lo = float(np.percentile(raw, 1.0))
     hi = float(np.percentile(raw, 99.5))
     save_centers(volumes, args.output, lo, hi)
-    write_nifti(args.output / "vol_fbp_original.nii.gz", raw, tuple(args.spacing))
-    write_nifti(args.output / "vol_fbp_denoised.nii.gz", denoised, tuple(args.spacing))
-    write_nifti(args.output / "vol_fbp_screened.nii.gz", screened, tuple(args.spacing))
+    for name, volume in volumes.items():
+        write_nifti(args.output / f"vol_fbp_{name}.nii.gz", volume, tuple(spacing), origin)
     np.save(args.output / "vol_fbp_denoised.npy", denoised)
     np.save(args.output / "vol_fbp_screened.npy", screened)
     np.save(args.output / "screen_mask.npy", mask.astype(np.uint8))
@@ -132,7 +130,8 @@ def main() -> None:
             f"sigma={args.sigma}", f"threshold={args.threshold}",
             f"min_component={args.min_component}", f"p99.5_scale={scale}",
             f"components={count}", f"kept_voxels={int(mask.sum())}",
-            f"kept_fraction={float(mask.mean())}", f"spacing={tuple(args.spacing)}",
+            f"kept_fraction={float(mask.mean())}", f"spacing={tuple(spacing)}",
+            f"origin_lps={tuple(origin)}", "nifti_axes=XYZ; direction=identity LPS",
         ]) + "\n", encoding="utf-8",
     )
     print(f"input shape={raw.shape}, p99.5={scale:.6g}")

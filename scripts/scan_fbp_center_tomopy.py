@@ -183,7 +183,7 @@ def find_center_by_endpoint_pair(endpoint_pair, rows, args):
     vacuum/background or a few corrupted detector rows.
     """
     view0, view180 = endpoint_pair
-    reference = view0.shape[1] / 2.0
+    reference = (view0.shape[1] - 1) / 2.0
     rows = np.asarray(rows, dtype=np.int64)
 
     def scan(offsets):
@@ -406,7 +406,7 @@ def main(args):
             fine_offsets,
             fine_scores,
         ) = find_center_by_endpoint_pair(endpoint_pair, indices, args)
-        center_reference = projections.shape[2] / 2.0
+        center_reference = (projections.shape[2] - 1) / 2.0
         retained_centers = row_centers[np.isfinite(row_centers)]
         if retained_centers.size == 0:
             raise SystemExit("Endpoint-pair center finding found no usable detector rows")

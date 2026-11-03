@@ -117,6 +117,11 @@ def getProjectionMatrix(fovX, fovY, mode, scanner_cfg):
         P[1, 1] = 2.0 * znear / (top - bottom)
         P[0, 2] = (right + left) / (right - left)
         P[1, 2] = (top + bottom) / (top - bottom)
+        # Fixed source, translated detector: shift the principal point,
+        # rather than moving the source/camera center. Offsets are [U,V].
+        offset = scanner_cfg.get("offDetector", [0.0, 0.0])
+        P[0, 2] -= 2.0 * float(offset[0]) / float(scanner_cfg["sDetector"][1])
+        P[1, 2] -= 2.0 * float(offset[1]) / float(scanner_cfg["sDetector"][0])
         P[3, 2] = z_sign
         P[2, 2] = z_sign * zfar / (zfar - znear)
         P[2, 3] = -(zfar * znear) / (zfar - znear)

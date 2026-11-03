@@ -192,8 +192,15 @@ def load_train_volume(args, reconstruct_train, expected_shape):
     dataset = args.dataset.resolve()
     data = dataset_metadata(dataset, args.stripe_correction)
     output = args.fbp_output.resolve() if args.fbp_output is not None else dataset / "vol_train_fbp.npy"
+    from r2_gaussian.utils.artifact_utils import (
+        dataset_identity, file_identity, atomic_npy, atomic_json, npy_path,
+    )
+    output = npy_path(output)
     signature = {
-        "version": 1, "scanner": data["scanner"],
+        "version": 3, "dataset": dataset_identity(dataset), "scanner": data["scanner"],
+        "implementation": [file_identity(Path(__file__).resolve().parents[1] / name)
+                           for name in ('init_from_fbp.py', 'scripts/stripe_correction.py',
+                                        'r2_gaussian/utils/ct_utils.py', 'r2_gaussian/utils/geometry_utils.py')],
         "stripe_correction": data["source"]["stripe_correction"],
         "proj_train": data["proj_train"],
         "projection_stats": [
@@ -208,7 +215,8 @@ def load_train_volume(args, reconstruct_train, expected_shape):
         cached = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pass
-    if output.exists() and cached == signature:
+    if (output.exists() and cached and cached.get("signature") == signature
+            and cached.get("artifact") == file_identity(output)):
         volume = np.asarray(np.load(output), dtype=np.float32)
     else:
         volume = np.asarray(reconstruct_train(dataset), dtype=np.float32)
@@ -218,8 +226,8 @@ def load_train_volume(args, reconstruct_train, expected_shape):
         if shape and volume.shape != shape:
             raise ValueError("Stripe-aware train FBP shape does not match scanner nVoxel")
         output.parent.mkdir(parents=True, exist_ok=True)
-        np.save(output, volume)
-        sidecar.write_text(json.dumps(signature, indent=2), encoding="utf-8")
+        atomic_npy(output, volume)
+        atomic_json(sidecar, {"signature": signature, "artifact": file_identity(output)})
     shape = tuple(int(n) for n in expected_shape(dataset))
     if volume.ndim != 3 or not np.isfinite(volume).all() or (shape and volume.shape != shape):
         raise ValueError("Invalid cached stripe-aware train FBP volume")

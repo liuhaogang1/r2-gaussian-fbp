@@ -122,7 +122,7 @@ def readCTameras(meta_data, source_path, eval=False, scene_scale=1.0):
             c2w = angle2pose(
                 cam_cfg["DSO"],
                 frame_angle,
-                offDetector=cam_cfg.get("offDetector", [0.0, 0.0]),
+                offDetector=cam_cfg.get("offDetector", [0.0, 0.0]) if cam_cfg["mode"] == "parallel" else None,
             )  # c2w
             # get the world-to-camera transform and set R, T
             w2c = np.linalg.inv(c2w)
@@ -275,7 +275,7 @@ def readNAFInfo(path, eval):
             c2w = angle2pose(
                 scanner_cfg["DSO"],
                 frame_angle,
-                offDetector=scanner_cfg.get("offDetector", [0.0, 0.0]),
+                offDetector=scanner_cfg.get("offDetector", [0.0, 0.0]) if scanner_cfg["mode"] == "parallel" else None,
             )
             # get the world-to-camera transform and set R, T
             w2c = np.linalg.inv(c2w)

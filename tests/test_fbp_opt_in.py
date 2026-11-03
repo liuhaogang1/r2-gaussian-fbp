@@ -6,10 +6,12 @@ The pinned reference is read from Git without altering the working tree.
 import argparse
 import builtins
 import contextlib
+import gzip
 import io
 import json
 from pathlib import Path
 import subprocess
+import struct
 import sys
 import tempfile
 from types import ModuleType
@@ -77,31 +79,32 @@ class OptInRegressionTests(unittest.TestCase):
             with self.subTest(extra=extra), forbid_optional_imports():
                 args = pipeline.resolve_args(pipeline.build_parser().parse_args(base + extra))
                 old = self.old_pipeline.resolve_args(self.old_pipeline.build_parser().parse_args(base + extra))
-                self.assertEqual(vars(args), vars(old))
+                expected = dict(vars(old), fbp_pixel_size_kind=None)
+                self.assertEqual(vars(args), expected)
+                if args.fbp_mode == "cone":
+                    args.fbp_pixel_size_kind = "detector"
                 pipeline.validate_args(args)
                 self.old_pipeline.validate_args(old)
-                self.assertEqual(pipeline.build_fbp_command(args, None, [0, 0]),
-                                 self.old_pipeline.build_fbp_command(old, None, [0, 0]))
+                expected_command = self.old_pipeline.build_fbp_command(old, None, [0, 0])
+                actual_command = pipeline.build_fbp_command(args, None, [0, 0])
+                if args.fbp_mode == "cone":
+                    index = actual_command.index("--pixel_size_kind")
+                    self.assertEqual(actual_command[index + 1], "detector")
+                    del actual_command[index:index + 2]
+                self.assertEqual(actual_command, expected_command)
                 self.assertEqual(pipeline.build_init_command(args, self.root / "init.npy"),
                                  self.old_pipeline.build_init_command(old, self.root / "init.npy"))
 
-    def test_default_dry_run_manifest_matches_original(self):
-        manifests = []
-        for module in (self.old_pipeline, pipeline):
-            args = module.resolve_args(module.build_parser().parse_args([
+    def test_default_dry_run_writes_nothing(self):
+            args = pipeline.resolve_args(pipeline.build_parser().parse_args([
                 "--input_dir", str(self.root / "input"),
                 "--output_dir", str(self.root / "out"),
                 "--model_path", str(self.root / "model"),
                 "--dry_run", "--skip_center", "--stop_after", "fbp"]))
             with forbid_optional_imports(), contextlib.redirect_stdout(io.StringIO()):
-                module.main(args)
-            manifests.append(json.loads((args.output_dir / "pipeline_manifest.json").read_text()))
-        # Execution timestamps are the only expected nondeterminism.
-        for manifest in manifests:
-            for key in list(manifest):
-                if "time" in key:
-                    manifest.pop(key)
-        self.assertEqual(manifests[0], manifests[1])
+                pipeline.main(args)
+            self.assertFalse(args.output_dir.exists())
+            self.assertFalse(args.model_path.exists())
 
     def test_default_prepare_outputs_geometry_and_previews_match_original(self):
         source = self.root / "input"
@@ -122,6 +125,8 @@ class OptInRegressionTests(unittest.TestCase):
                 if recon is not None:
                     command += ["--recon_pixel_subsample", str(recon)]
                 args = module.build_parser().parse_args(command)
+                if mode == "cone" and module is prepare:
+                    args.pixel_size_kind = "detector"
                 calls = []
                 def backend(projections, angles, options, geometry):
                     calls.append((projections.copy(), angles.copy(), vars(geometry).copy()))
@@ -134,6 +139,11 @@ class OptInRegressionTests(unittest.TestCase):
                 arrays = {str(p.relative_to(output)): np.load(p) for p in output.rglob("*.npy")}
                 results.append((metadata, arrays, calls, preview.call_args.args[2]))
             old, new = results
+            self.assertEqual(new[0]["source"].pop("pixel_size_kind"),
+                             "detector" if mode == "cone" else None)
+            self.assertGreater(new[0]["source"].pop("detector_pixel_size"), 0)
+            self.assertEqual(new[0]['source'].pop('geometry_version'), 2)
+            self.assertEqual(len(new[0]['source'].pop('projection_files')), new[0]['source']['n_views'])
             with self.subTest(factor=factor, recon=recon, mode=mode):
                 self.assertEqual(old[0], new[0])
                 self.assertEqual(old[1].keys(), new[1].keys())
@@ -190,21 +200,23 @@ class OptInRegressionTests(unittest.TestCase):
         np.testing.assert_allclose(np.load(output)[:, :3],
                                    initialization_positions(selected, volume.shape, scanner))
 
-    def test_default_nifti_export_matches_original(self):
+    def test_nifti_export_uses_xyz_and_scanner_voxel_centers(self):
+        # Orientation repair intentionally replaces the old display-only file
+        # convention. Disabled preprocessing still preserves the NPY pipeline.
         volume = np.arange(192, dtype=np.float32).reshape(4, 6, 8) - 2
-        scanner = {"sVoxel": [.01, .02, .03]}
-        exports = []
-        for module in (self.old_init, init):
-            sitk = ModuleType("SimpleITK")
-            image = mock.Mock()
-            sitk.GetImageFromArray = mock.Mock(return_value=image)
-            sitk.WriteImage = mock.Mock()
-            with forbid_optional_imports(), mock.patch.dict(sys.modules, {"SimpleITK": sitk}):
-                module.save_fbp_nifti(volume, self.root / "preview.nii.gz", scanner)
-            exports.append((sitk.GetImageFromArray.call_args.args[0],
-                            image.SetSpacing.call_args.args[0]))
-        np.testing.assert_array_equal(exports[0][0], exports[1][0])
-        self.assertEqual(exports[0][1], exports[1][1])
+        scanner = {"sVoxel": [.01, .02, .03], "offOrigin": [.2, -.3, .4]}
+        path = self.root / "preview.nii.gz"
+        with forbid_optional_imports():
+            init.save_fbp_nifti(volume, path, scanner)
+        with gzip.open(path, "rb") as stream:
+            payload = stream.read()
+        self.assertEqual(struct.unpack_from("<8h", payload, 40), (3, 4, 6, 8, 1, 1, 1, 1))
+        actual = np.frombuffer(payload, dtype="<f4", offset=352).reshape(volume.shape, order="F")
+        np.testing.assert_array_equal(actual, np.maximum(volume, 0))
+        spacing = np.asarray(scanner["sVoxel"]) / volume.shape
+        origin = np.asarray(scanner["offOrigin"]) - np.asarray(scanner["sVoxel"]) / 2 + spacing / 2
+        affine = np.array([struct.unpack_from("<4f", payload, offset) for offset in (280, 296, 312)])
+        np.testing.assert_allclose(affine[:, 3], origin * [-1, -1, 1])
 
     def test_auto_only_changes_volume_bounds(self):
         source = self.root / "input"

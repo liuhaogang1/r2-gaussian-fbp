@@ -1,0 +1,141 @@
+test_cone_pitch_is_explicit_and_axis_detector_options_equivalent (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_config_inheritance_none_typed_values_and_test_path_fallback (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_dataset_identity_is_order_independent_but_content_sensitive (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_dry_run_entire_pipeline_writes_nothing (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_natural_filename_sort_and_cone_keeps_180_degree_endpoint (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_odd_detector_sampling_retains_center_and_declared_pitch (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_pose_checkpoint_requires_identical_order (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_pose_file_reorders_views_and_rejects_wrong_iteration_and_content (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_pose_rejects_legacy_shapes_nan_and_duplicate_ids (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_real_pose_snapshot_loads_parallel_and_cone_with_unicode_binding (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_resume_validates_repeated_resume_config_inputs_and_output (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_source_signature_ignores_generated_nested_outputs_but_hashes_tiffs (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_stripe_train_cache_reuse_tampering_and_provenance (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_top_level_pipeline_paths_and_legacy_train_paths_are_distinct (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_train_fbp_cache_content_and_output_tampering_force_reconstruction (test_artifact_integrity.ArtifactIntegrityTests) ... ok
+test_evaluation_exports_original_lengths_and_xyz_preview_without_mutating_query (test_evaluation_export_orientation.EvaluationExportTests) ... ok
+test_cache_reuses_only_same_inputs_parameters_and_output_content (test_experiment_preprocess.ExperimentPreprocessTests) ... ok
+test_corrected_sampling_matches_shared_physical_resampling (test_experiment_preprocess.ExperimentPreprocessTests) ... ok
+test_analytic_disk_fbp_recovers_physical_center_and_radius (test_fbp_geometry.PhysicalProjectionTests) ... ok
+test_centered_cube_positions_preserved (test_fbp_geometry.PhysicalProjectionTests) ... ok
+test_invalid_detector_extents (test_fbp_geometry.PhysicalProjectionTests) ... ok
+test_non_cubic_offset_voxel_positions (test_fbp_geometry.PhysicalProjectionTests) ... ok
+test_off_center_points_match_physical_pixels_across_angles (test_fbp_geometry.PhysicalProjectionTests) ... ok
+test_physical_fbp_rectangular_detector_and_offsets (test_fbp_geometry.PhysicalProjectionTests) ... ok
+test_production_base_and_pose_matrices_preserve_scale_and_pixel_shifts (test_fbp_geometry.PhysicalProjectionTests) ... ok
+test_removed_cli_and_yaml_rejected (test_fbp_geometry.PhysicalProjectionTests) ... ok
+test_render_covariance_half_extents_for_both_backends (test_fbp_geometry.PhysicalProjectionTests) ... ok
+test_sphere_radius_and_integration_length (test_fbp_geometry.PhysicalProjectionTests) ... ok
+test_virtual_dataset_rejected (test_fbp_geometry.PhysicalProjectionTests) ... ok
+Resolved fbp_sVoxel auto: [0.00048000000000000007, 0.00048000000000000007, 0.00048000000000000007] (processed_detector_max_extent)
+test_auto_only_changes_volume_bounds (test_fbp_opt_in.OptInRegressionTests) ... ok
+test_default_dry_run_writes_nothing (test_fbp_opt_in.OptInRegressionTests) ... ok
+test_default_prepare_outputs_geometry_and_previews_match_original (test_fbp_opt_in.OptInRegressionTests) ... ok
+test_nifti_export_uses_xyz_and_scanner_voxel_centers (test_fbp_opt_in.OptInRegressionTests) ... ok
+test_original_resolved_arguments_and_stage_commands (test_fbp_opt_in.OptInRegressionTests) ... ok
+test_point_positions_use_physical_non_cubic_bounds (test_fbp_opt_in.OptInRegressionTests) ... ok
+test_removed_virtual_dataset_is_rejected_before_cache_reuse (test_fbp_opt_in.OptInRegressionTests) ... ok
+test_train_reconstruction_keeps_physical_scanner (test_fbp_opt_in.OptInRegressionTests) ... ok
+Saved train-view FBP NIfTI to C:\Users\94012\AppData\Local\Temp\tmp3swchxyx\preview.nii.gz
+test_incomplete_export_removed_and_existing_result_preserved (test_highres_failure_cleanup.ExportFailureTests) ... 
+Query Gaussian field:   0%|          | 0/2 [00:00<?, ?block/s]
+Query Gaussian field:  50%|����������     | 1/2 [00:00<?, ?block/s]
+ok
+test_all_initialization_sources_are_denoised (test_init_denoise.InitDenoiseTests) ... ok
+test_conflicting_outputs_are_rejected (test_init_denoise.InitDenoiseTests) ... ok
+test_custom_artifact_directory_preserves_resume_checks (test_init_denoise.InitDenoiseTests) ... ok
+test_disabled_matches_pinned_initializer_and_does_not_import_denoiser (test_init_denoise.InitDenoiseTests) ... ok
+test_filter_sampling_densities_and_original_files (test_init_denoise.InitDenoiseTests) ... ok
+test_invalid_sigma_and_missing_metadata_fail_without_outputs (test_init_denoise.InitDenoiseTests) ... ok
+test_nifti_preserves_xyz_values_spacing_and_voxel_center_origin (test_init_denoise.InitDenoiseTests) ... ok
+test_no_percentile_and_insufficient_candidates (test_init_denoise.InitDenoiseTests) ... ok
+test_pipeline_rejects_skipped_init_checkpoint_or_external_points (test_init_denoise.InitDenoiseTests) ... ok
+test_pipeline_routes_new_points_and_preserves_baseline_configuration (test_init_denoise.InitDenoiseTests) ... ok
+test_real_previews_and_optional_nifti_are_written (test_init_denoise.InitDenoiseTests) ... ok
+test_resume_rejects_changed_inputs_and_point_cloud (test_init_denoise.InitDenoiseTests) ... ok
+test_resume_rejects_replaced_report (test_init_denoise.InitDenoiseTests) ... ok
+test_resume_repeated_and_parameter_changes_are_checked (test_init_denoise.InitDenoiseTests) ... ok
+test_yaml_cli_override_and_explicit_disable (test_init_denoise.InitDenoiseTests) ... ok
+test_cli_new_and_legacy_masks_produce_same_xyz_and_dataset_geometry (test_mask_orientation.MaskOrientationTests) ... ok
+test_cropped_and_reoriented_slicer_labelmaps_use_reference_geometry (test_mask_orientation.MaskOrientationTests) ... ok
+test_cubic_unmarked_reference_requires_explicit_axes (test_mask_orientation.MaskOrientationTests) ... ok
+test_legacy_full_grid_can_be_inferred_and_explicitly_selected (test_mask_orientation.MaskOrientationTests) ... ok
+test_new_xyz_marker_and_large_labels_survive_resampling (test_mask_orientation.MaskOrientationTests) ... ok
+test_no_metadata_preserves_legacy_physical_mapping_with_xyz_payload (test_mask_orientation.MaskOrientationTests) ... ok
+test_output_without_npy_suffix_cannot_overwrite_input (test_mask_orientation.MaskOrientationTests) ... ok
+test_wrong_reference_shape_rejected_before_resampling (test_mask_orientation.MaskOrientationTests) ... ok
+test_beam_tilt_changes_ray_but_keeps_center_and_rotation_valid (test_parallel_pose_geometry.ParallelPoseGeometryTests) ... ok
+test_centered_per_view_offsets_remain_zero_mean_and_bounded (test_parallel_pose_geometry.ParallelPoseGeometryTests) ... ok
+test_cone_rotation_quaternion_round_trip_across_scan_angles (test_parallel_pose_geometry.ParallelPoseGeometryTests) ... ok
+test_delta_angle_matches_scanner_trajectory_and_moves_center (test_parallel_pose_geometry.ParallelPoseGeometryTests) ... ok
+test_detector_roll_changes_detector_axes_only (test_parallel_pose_geometry.ParallelPoseGeometryTests) ... ok
+test_global_only_pose_skips_per_view_values (test_parallel_pose_geometry.ParallelPoseGeometryTests) ... ok
+test_saved_pose_has_version_and_complete_geometry_report (test_parallel_pose_geometry.ParallelPoseGeometryTests) ... ok
+test_zero_correction_preserves_rasterizer_view_matrix_convention (test_parallel_pose_geometry.ParallelPoseGeometryTests) ... ok
+test_child_failure_is_logged_and_summary_never_reports_success (test_server_validation_runner.ServerRunnerTests) ... ok
+test_init_coordinate_validation_uses_normalized_scene_and_xyz_nifti (test_server_validation_runner.ServerRunnerTests) ... ok
+test_plan_creates_no_output_and_config_resolves_real_flags (test_server_validation_runner.ServerRunnerTests) ... ok
+test_bounded_split_rejects_unrepresentable_children (test_shape_suppression_cuda.ShapeSuppressionCudaTests) ... ok
+test_repair_and_split_keep_optimizer_tensors_aligned (test_shape_suppression_cuda.ShapeSuppressionCudaTests) ... ok
+test_shape_penalty_has_gradient_only_for_over_threshold_gaussian (test_shape_suppression_cuda.ShapeSuppressionCudaTests) ... ok
+test_shape_pruning_retains_one_gaussian_when_all_candidates_are_low (test_shape_suppression_cuda.ShapeSuppressionCudaTests) ... ok
+test_simultaneous_sheet_needle_repair_with_large_density (test_shape_suppression_cuda.ShapeSuppressionCudaTests) ... ok
+test_split_multiple_parents_has_correct_child_positions (test_shape_suppression_cuda.ShapeSuppressionCudaTests) ... ok
+test_invalid_hard_action_is_rejected (test_shape_suppression_options.ShapeSuppressionOptionTests) ... ok
+test_shape_options_are_absent_from_legacy_resolved_arguments (test_shape_suppression_options.ShapeSuppressionOptionTests) ... ok
+test_shape_options_resolve_and_reach_train_command (test_shape_suppression_options.ShapeSuppressionOptionTests) ... ok
+test_metadata_provenance_is_required_for_processed_npy (test_stripe_correction.StripeCorrectionTests) ... ok
+test_native_correction_saves_same_window_before_and_after (test_stripe_correction.StripeCorrectionTests) ... ok
+test_options_are_strict_and_defaulted (test_stripe_correction.StripeCorrectionTests) ... ok
+test_both_parsers_accept_auto_and_manual_but_reject_partial (test_svoxel_auto.AutoSizeTests) ... ok
+Resolved fbp_sVoxel auto: [0.01, 0.02, 0.03] (existing_dataset)
+test_continuing_train_uses_existing_grid_without_raw_tiffs (test_svoxel_auto.AutoSizeTests) ... ok
+test_downsampling_crop_and_rounding_are_included (test_svoxel_auto.AutoSizeTests) ... ok
+Resolved fbp_sVoxel auto: [0.01904, 0.01904, 0.01904] (processed_detector_max_extent)
+Center stage skipped; using fbp_offDetector.
+[dry-run] D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\prepare_fbp_tiff.py --input_dir C:\Users\94012\AppData\Local\Temp\tmpa_dn_8rw\input --output_dir C:\Users\94012\AppData\Local\Temp\tmpa_dn_8rw\out --dark_value 0.0 --flat_eps 1e-06 --angle_start 0.0 --angle_interval 0.5 --mode parallel --input_type line_integral --i0 1.0 --i0_mode percentile --i0_percentile 99.5 --i0_hi_percentile 99.9 --zero_policy nearest --log_eps 1e-06 --clip_percentile 99.9 --shift_v 0 --pixel_subsample 1 --resize_order 1 --projection_scale 0.125 --n_train 50 --n_test 100 --nVoxel 128 128 128 --sVoxel auto --offOrigin 0.0 0.0 0.0 --DSD 7.0 --DSO 5.0 --pixel_size 4e-05 --accuracy 0.5 --filter hann --seed 0 --free_ray 0 128 0 128 --offDetector 0.0 0.0
+test_dry_run_manifest_has_resolved_numbers_and_auto_provenance (test_svoxel_auto.AutoSizeTests) ... ok
+test_each_dataset_uses_its_own_projection_header (test_svoxel_auto.AutoSizeTests) ... ok
+Dry run complete: no files were written.
+Resolved fbp_sVoxel auto: [0.01904, 0.01904, 0.01904] (processed_detector_max_extent)
+test_flat_field_default_glob_excludes_flat_header (test_svoxel_auto.AutoSizeTests) ... ok
+test_invalid_manual_and_auto_values_are_rejected (test_svoxel_auto.AutoSizeTests) ... ok
+Resolved fbp_sVoxel auto: [0.01904, 0.01904, 0.01904] (processed_detector_max_extent)
+test_pipeline_resolves_current_input_and_keeps_auto_for_prepare (test_svoxel_auto.AutoSizeTests) ... ok
+sVoxel auto: [8, 12] -> [0.00048000000000000007, 0.00048000000000000007, 0.00048000000000000007]
+test_prepare_metadata_and_volume_match_manual_auto_result (test_svoxel_auto.AutoSizeTests) ... ok
+test_shape_prediction_matches_real_preprocessing (test_svoxel_auto.AutoSizeTests) ... ok
+test_yaml_auto_and_explicit_values (test_svoxel_auto.AutoSizeTests) ... ok
+test_build_command_runs_original_prepare_with_per_case_values (test_sweep_fbp_pixel_size.SweepWrapperTests) ... ok
+test_candidates_are_validated_and_deduplicated (test_sweep_fbp_pixel_size.SweepWrapperTests) ... ok
+test_cli_rejects_center_and_pixel_size_forwarding (test_sweep_fbp_pixel_size.SweepWrapperTests) ... ok
+test_dry_run_prints_commands_and_writes_nothing (test_sweep_fbp_pixel_size.SweepWrapperTests) ... ok
+Saved FBP volume: C:\Users\94012\AppData\Local\Temp\tmp63wz_z0v\auto\vol_fbp.npy
+Saved FBP previews: C:\Users\94012\AppData\Local\Temp\tmp63wz_z0v\auto\vol_fbp_preview_z.png and C:\Users\94012\AppData\Local\Temp\tmp63wz_z0v\auto\vol_fbp_preview.nii.gz (window 0 ~ 1)
+Saved 3 full views, 2 training views, and 1 test views
+Saved FBP volume: C:\Users\94012\AppData\Local\Temp\tmp63wz_z0v\manual\vol_fbp.npy
+Saved FBP previews: C:\Users\94012\AppData\Local\Temp\tmp63wz_z0v\manual\vol_fbp_preview_z.png and C:\Users\94012\AppData\Local\Temp\tmp63wz_z0v\manual\vol_fbp_preview.nii.gz (window 0 ~ 1)
+Saved 3 full views, 2 training views, and 1 test views
+'D:\CondaData\envs\r2_gaussian\python.exe' 'D:\TEM\r2-gaussian-fbp\prepare_fbp_tiff.py' --input_dir 'C:\Users\94012\AppData\Local\Temp\fbp_sweep_wrapper_8pcy9x26\input' --flat_field --input_type line_integral --shift_v 0 --nVoxel 4 4 4 --pixel_size 0.1 --output_dir 'C:\Users\94012\AppData\Local\Temp\fbp_sweep_wrapper_8pcy9x26\sweep\001_ps_0.1\fbp'
+'D:\CondaData\envs\r2_gaussian\python.exe' 'D:\TEM\r2-gaussian-fbp\prepare_fbp_tiff.py' --input_dir 'C:\Users\94012\AppData\Local\Temp\fbp_sweep_wrapper_8pcy9x26\input' --flat_field --input_type line_integral --shift_v 0 --nVoxel 4 4 4 --pixel_size 0.01 --output_dir 'C:\Users\94012\AppData\Local\Temp\fbp_sweep_wrapper_8pcy9x26\sweep\002_ps_0.01\fbp'
+'D:\CondaData\envs\r2_gaussian\python.exe' 'D:\TEM\r2-gaussian-fbp\prepare_fbp_tiff.py' --input_dir 'C:\Users\94012\AppData\Local\Temp\fbp_sweep_wrapper_8pcy9x26\input' --flat_field --input_type line_integral --shift_v 0 --nVoxel 4 4 4 --pixel_size 0.001 --output_dir 'C:\Users\94012\AppData\Local\Temp\fbp_sweep_wrapper_8pcy9x26\sweep\003_ps_0.001\fbp'
+Dry run: commands only; no files were created and prepare_fbp_tiff.py was not run.
+001_ps_0.1: success 
+002_ps_0.01: failed prepare_fbp_tiff.py exited 7; see prepare.log
+003_ps_0.001: success 
+Finished: 2/3 successful. Results: C:\Users\94012\AppData\Local\Temp\fbp_sweep_wrapper_txsixr5a\sweep
+test_each_candidate_runs_prepare_independently_and_continues_failure (test_sweep_fbp_pixel_size.SweepWrapperTests) ... ok
+001_ps_0.1: failed prepare_fbp_tiff.py exited 4; see prepare.log
+Finished: 0/3 successful. Results: C:\Users\94012\AppData\Local\Temp\fbp_sweep_wrapper_4bdruegf\sweep
+test_fail_fast_skips_later_candidates (test_sweep_fbp_pixel_size.SweepWrapperTests) ... ok
+test_output_input_and_forbidden_overrides_are_protected (test_sweep_fbp_pixel_size.SweepWrapperTests) ... ok
+test_center_montage_and_constant_window (test_volume_export_utils.VolumeOutputTests) ... ok
+test_existing_outputs_are_preserved (test_volume_export_utils.VolumeOutputTests) ... ok
+test_matches_xyz_simpleitk_reference (test_volume_export_utils.VolumeOutputTests) ... ok
+test_nifti_header_and_streamed_data (test_volume_export_utils.VolumeOutputTests) ... ok
+test_slicer_reader_geometry_and_orientation (test_volume_export_utils.VolumeOutputTests) ... ok
+
+----------------------------------------------------------------------
+Ran 107 tests in 8.450s
+
+OK

@@ -2,9 +2,7 @@
 
 import hashlib
 import json
-import os
 from pathlib import Path
-import tempfile
 import time
 
 import numpy as np
@@ -118,8 +116,12 @@ def save_previews(original, denoised, mask, output_dir):
             for plot, data, title in zip(axes[:2], (before, after), ("Original FBP", "Denoised FBP")):
                 plot.imshow(data, origin="lower", cmap="gray", vmin=low, vmax=high)
                 plot.set_title(title)
+                plot.set_xlabel(("Y", "X", "X")[axis])
+                plot.set_ylabel(("Z", "Z", "Y")[axis])
             delta = axes[2].imshow(diff, origin="lower", cmap="coolwarm", vmin=-limit, vmax=limit)
             axes[2].set_title("Denoised - original")
+            axes[2].set_xlabel(("Y", "X", "X")[axis])
+            axes[2].set_ylabel(("Z", "Z", "Y")[axis])
             fig.colorbar(delta, ax=axes[2], shrink=0.7)
             fig.suptitle(f"{name.upper()} center: index {index} | shared grayscale window")
             fig.savefig(output_dir / f"comparison_center_{name}.png", dpi=140)
@@ -132,6 +134,8 @@ def save_previews(original, denoised, mask, output_dir):
             overlay[selected] = (1.0, 0.2, 0.0, 0.4)
             plot.imshow(overlay, origin="lower")
             plot.set_title(f"{name.upper()} center | candidate voxels (before sampling)")
+            plot.set_xlabel(("Y", "X", "X")[axis])
+            plot.set_ylabel(("Z", "Z", "Y")[axis])
             fig.savefig(output_dir / f"candidate_mask_center_{name}.png", dpi=140)
         finally:
             plt.close(fig)
@@ -144,24 +148,9 @@ def save_nifti_xyz(volume, scanner, output):
     Unlike the legacy display-only exporter, NIfTI I/J/K are input X/Y/Z.
     No metric unit is asserted: scanner lengths are used without conversion.
     """
-    from r2_gaussian.utils.volume_export_utils import save_nifti_streaming
+    from r2_gaussian.utils.volume_export_utils import save_nifti_xyz as save
 
-    size = np.asarray(scanner["sVoxel"], dtype=np.float64)
-    spacing = size / np.asarray(volume.shape)
-    origin = np.asarray(scanner.get("offOrigin", [0, 0, 0])) - size / 2 + spacing / 2
-    output = Path(output)
-    # The shared streaming writer uses legacy Y/X/Z display axes. Pass a view
-    # with X/Y exchanged to produce a true XYZ file without copying the volume.
-    descriptor, temporary = tempfile.mkstemp(dir=output.parent, suffix=".nii.gz")
-    os.close(descriptor)
-    Path(temporary).unlink()
-    try:
-        save_nifti_streaming(volume.transpose(1, 0, 2), spacing, origin, temporary)
-        os.replace(temporary, output)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
-    return {"axes": "XYZ", "spacing": spacing.tolist(), "origin_lps": origin.tolist(),
-            "length_units": "dataset units (no conversion)"}
+    return save(volume, scanner, output)
 
 
 def save_artifacts(original, denoised, mask, selected, point_cloud, scanner,

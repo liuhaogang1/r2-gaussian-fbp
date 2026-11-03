@@ -12,6 +12,8 @@ from typing import Dict, Optional
 import torch
 from torch import nn
 
+PARALLEL_POSE_FORMAT_VERSION = 2
+
 
 class ParallelPose(nn.Module):
     """Global and per-view corrections for a parallel-beam scan.
@@ -92,18 +94,31 @@ class ParallelPose(nn.Module):
     def _bounded(raw: Optional[torch.Tensor], maximum: torch.Tensor):
         return None if raw is None else maximum * torch.tanh(raw)
 
+    @staticmethod
+    def _center_and_bound(value: torch.Tensor, maximum: torch.Tensor):
+        """Keep a per-view correction zero-mean without exceeding its limit."""
+        centered = value - torch.mean(value, dim=0, keepdim=True)
+        max_abs = torch.amax(torch.abs(centered), dim=0, keepdim=True)
+        scale = torch.clamp(
+            maximum / torch.clamp(max_abs, min=1.0e-12),
+            max=1.0,
+        )
+        return centered * scale
+
     def values(self) -> Dict[str, Optional[torch.Tensor]]:
         delta_angle = self._bounded(self.raw_angle, self.max_angle)
         if delta_angle is not None:
             # Fix the global angular gauge: only relative view errors are learned.
-            delta_angle = delta_angle - delta_angle.mean()
+            delta_angle = self._center_and_bound(delta_angle, self.max_angle)
 
         view_shift = self._bounded(
             self.raw_view_shift, self.max_detector_shift
         )
         if view_shift is not None:
             # The global detector shift carries the mean component.
-            view_shift = view_shift - view_shift.mean(dim=0, keepdim=True)
+            view_shift = self._center_and_bound(
+                view_shift, self.max_detector_shift
+            )
 
         return {
             "delta_angle": delta_angle,
@@ -156,8 +171,30 @@ class StaticParallelPose:
     def from_npz(cls, path, device="cuda"):
         import numpy as np
 
-        data = np.load(path)
-        return cls({key: data[key] for key in data.files}, device=device)
+        with np.load(path) as data:
+            version = (
+                int(data["pose_format_version"].item())
+                if "pose_format_version" in data
+                else None
+            )
+            if version != PARALLEL_POSE_FORMAT_VERSION:
+                raise ValueError(
+                    "This parallel pose file uses the legacy transposed-rotation "
+                    "convention (or has no format version). Retrain with the "
+                    "corrected geometry before loading it."
+                )
+            values = {
+                key: data[key]
+                for key in (
+                    "delta_angle",
+                    "global_shift",
+                    "view_shift",
+                    "beam_tilt",
+                    "detector_roll",
+                )
+                if key in data
+            }
+        return cls(values, device=device)
 
     def values(self):
         return self._values

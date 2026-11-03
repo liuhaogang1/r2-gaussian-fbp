@@ -1,0 +1,26 @@
+{'offset': [0.0, 0.0], 'center': [-0.3499999940395355, 0.1599999964237213, 0.18000000715255737], 'angle': 0.0, 'cuda': [59.493375581961246, 42.99809493959691], 'tigre': [59.576678792746755, 42.94318136935585], 'expected': [59.499999910593026, 42.99999982118607]}
+{'offset': [0.0, 0.0], 'center': [-0.3499999940395355, 0.1599999964237213, 0.18000000715255737], 'angle': 0.800000011920929, 'cuda': [64.5637086038215, 42.998098800940056], 'tigre': [64.56349463003399, 42.943183595679194], 'expected': [64.5636924603487, 42.99999982118607]}
+{'offset': [0.0, 0.0], 'center': [-0.3499999940395355, 0.1599999964237213, 0.18000000715255737], 'angle': 1.600000023841858, 'cuda': [64.1294837511489, 42.99802747477704], 'tigre': [64.06540148345387, 42.94318908325078], 'expected': [64.12947081652774, 42.99999982118607]}
+{'offset': [0.0, 0.0], 'center': [0.3499999940395355, 0.1599999964237213, 0.18000000715255737], 'angle': 0.0, 'cuda': [59.493375581961246, 42.99809493959691], 'tigre': [59.57668057555344, 42.9431826327782], 'expected': [59.499999910593026, 42.99999982118607]}
+{'offset': [0.0, 0.0], 'center': [0.3499999940395355, 0.1599999964237213, 0.18000000715255737], 'angle': 0.800000011920929, 'cuda': [52.00998863631963, 42.998028839732925], 'tigre': [52.00901387249363, 42.94318102618998], 'expected': [52.00996113148535, 42.99999982118607]}
+{'offset': [0.0, 0.0], 'center': [0.3499999940395355, 0.1599999964237213, 0.18000000715255737], 'angle': 1.600000023841858, 'cuda': [46.636909162823905, 42.998097315869906], 'tigre': [46.65667950800439, 42.94318346065168], 'expected': [46.63693282742031, 42.99999982118607]}
+{'offset': [0.12, -0.08], 'center': [-0.3499999940395355, 0.1599999964237213, 0.18000000715255737], 'angle': 0.0, 'cuda': [56.50000212934333, 45.000001695937165], 'tigre': [57.568967835241395, 43.94318578302037], 'expected': [56.499999910593026, 44.99999982118607]}
+Traceback (most recent call last):
+  File "D:\TEM\r2-gaussian-fbp\scripts\smoke_cone_geometry.py", line 83, in <module>
+    main()
+  File "D:\TEM\r2-gaussian-fbp\scripts\smoke_cone_geometry.py", line 74, in main
+    np.testing.assert_allclose(tigre_center,expected,atol=.35)
+  File "D:\CondaData\envs\r2_gaussian\lib\site-packages\numpy\testing\_private\utils.py", line 1592, in assert_allclose
+    assert_array_compare(compare, actual, desired, err_msg=str(err_msg),
+  File "D:\CondaData\envs\r2_gaussian\lib\contextlib.py", line 79, in inner
+    return func(*args, **kwds)
+  File "D:\CondaData\envs\r2_gaussian\lib\site-packages\numpy\testing\_private\utils.py", line 862, in assert_array_compare
+    raise AssertionError(msg)
+AssertionError: 
+Not equal to tolerance rtol=1e-07, atol=0.35
+
+Mismatched elements: 2 / 2 (100%)
+Max absolute difference: 1.06896792
+Max relative difference: 0.02348476
+ x: array([57.568968, 43.943186])
+ y: array([56.5, 45. ])

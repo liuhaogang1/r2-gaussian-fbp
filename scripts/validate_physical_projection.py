@@ -86,6 +86,61 @@ def check_render(torch, render, camera, model, pipe, cfg, center, sigma, shift):
     )
 
 
+def check_pose_matrices(torch, camera, pose, angle, cfg, angle2pose):
+    """Check scan angle, beam tilt and detector roll in the real tensor path."""
+    device = camera.world_view_transform.device
+    base = torch.as_tensor(
+        angle2pose(8, angle, cfg["offDetector"]), dtype=torch.float32, device=device
+    )
+
+    def rotation(axis, value):
+        c, s = torch.cos(value), torch.sin(value)
+        result = torch.eye(4, dtype=torch.float32, device=device)
+        if axis == "x":
+            result[1, 1], result[1, 2] = c, -s
+            result[2, 1], result[2, 2] = s, c
+        elif axis == "y":
+            result[0, 0], result[0, 2] = c, s
+            result[2, 0], result[2, 2] = -s, c
+        else:
+            result[0, 0], result[0, 1] = c, -s
+            result[1, 0], result[1, 1] = s, c
+        return result
+
+    def current_c2w():
+        camera.refresh_parameters()
+        return torch.linalg.inv(camera.world_view_transform).transpose(0, 1)
+
+    with torch.no_grad():
+        angle_delta = torch.tensor(np.deg2rad(0.2), device=device)
+        angle_raw = torch.atanh(angle_delta / pose.max_angle)
+        pose.raw_angle.copy_(torch.stack((angle_raw, -angle_raw)))
+        actual = current_c2w()
+        expected = torch.as_tensor(
+            angle2pose(8, angle + float(angle_delta), cfg["offDetector"]),
+            dtype=torch.float32,
+            device=device,
+        )
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
+
+        pose.raw_angle.zero_()
+        tilt = torch.deg2rad(torch.tensor([0.2, -0.15], device=device))
+        pose.raw_beam_tilt.copy_(torch.atanh(tilt / pose.max_beam_tilt))
+        actual = current_c2w()
+        expected = base @ rotation("x", tilt[0]) @ rotation("y", tilt[1])
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
+
+        pose.raw_beam_tilt.zero_()
+        roll = torch.deg2rad(torch.tensor(0.25, device=device))
+        pose.raw_detector_roll.copy_(torch.atanh(roll / pose.max_detector_roll).view(1))
+        actual = current_c2w()
+        expected = base @ rotation("z", roll)
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
+
+        pose.raw_detector_roll.zero_()
+        camera.refresh_parameters()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -134,7 +189,14 @@ def main():
                         )
                         if pose_enabled:
                             pose = ParallelPose(
-                                1, {"optimize_global_detector_shift": True}, device="cuda"
+                                2,
+                                {
+                                    "optimize_angle": True,
+                                    "optimize_global_detector_shift": True,
+                                    "optimize_beam_tilt": True,
+                                    "optimize_detector_roll": True,
+                                },
+                                device="cuda",
                             )
                             with torch.no_grad():
                                 pose.raw_global_shift.copy_(
@@ -143,6 +205,7 @@ def main():
                                     )
                                 )
                             camera.attach_parallel_pose(pose, 0)
+                            check_pose_matrices(torch, camera, pose, angle, cfg, angle2pose)
                         model = GaussianModel()
                         model._xyz = torch.nn.Parameter(
                             torch.as_tensor(center[None], device="cuda")

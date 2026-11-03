@@ -57,8 +57,8 @@ class AutoSizeTests(unittest.TestCase):
     def test_downsampling_crop_and_rounding_are_included(self):
         path = self.projection((360, 476))
         values, info = auto_svoxel_from_projection(path, .00004, 4)
-        self.assertEqual(info["processed_shape"], [90, 91])
-        np.testing.assert_allclose(values, [91 * .00004 * 4] * 3)
+        self.assertEqual(info["processed_shape"], [90, 90])
+        np.testing.assert_allclose(values, [90 * .00004 * 4] * 3)
 
     def test_invalid_manual_and_auto_values_are_rejected(self):
         self.assertEqual(parse_svoxel("AUTO"), "auto")
@@ -109,8 +109,8 @@ class AutoSizeTests(unittest.TestCase):
         self.projection((360, 476))
         args = self.pipeline_args("--dry_run", "--stop_after", "fbp", "--skip_center")
         pipeline.main(args)
-        manifest = json.loads((args.output_dir / "pipeline_manifest.json").read_text())
-        resolved = manifest["resolved_arguments"]
+        self.assertFalse(args.output_dir.exists())
+        resolved = vars(args)
         np.testing.assert_allclose(resolved["fbp_sVoxel"], [.01904] * 3)
         self.assertEqual(resolved["fbp_sVoxel_requested"], "auto")
         self.assertEqual(resolved["fbp_sVoxel_resolution"]["processed_shape"], [360, 476])

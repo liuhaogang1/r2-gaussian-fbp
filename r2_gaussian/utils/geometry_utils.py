@@ -8,6 +8,12 @@ reader, so detector lengths have already been multiplied by 2/max(sVoxel).
 import numpy as np
 
 
+def tigre_detector_offset(offset):
+    """Project [U,V] offsets to TIGRE [V,U] before saved-row reversal."""
+    u, v = offset
+    return np.asarray([-v, u], dtype=np.float32)
+
+
 def parallel_detector_half_extents(scanner):
     """Return camera U/V half extents, not perspective field-of-view angles."""
     size = np.asarray(scanner["sDetector"], dtype=np.float64)

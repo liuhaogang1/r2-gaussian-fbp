@@ -17,7 +17,11 @@ from pathlib import Path
 
 import numpy as np
 import tifffile
-from scipy.ndimage import distance_transform_edt, zoom
+from scipy.ndimage import distance_transform_edt
+import sys
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts.fbp_preprocess import process_projection, select_tiff_paths
 
 
 def fill_nearest(image: np.ndarray, bad: np.ndarray) -> np.ndarray:
@@ -35,6 +39,8 @@ def fill_nearest(image: np.ndarray, bad: np.ndarray) -> np.ndarray:
 def process_corrected(image, flat, args):
     image = np.asarray(image, dtype=np.float32)
     flat = np.asarray(flat, dtype=np.float32)
+    if image.shape != flat.shape:
+        raise ValueError('Projection and flat-field shapes differ')
     dark = float(args.dark_value)
     denominator = flat - dark
     valid_flat = denominator > float(args.flat_eps)
@@ -57,26 +63,11 @@ def process_corrected(image, flat, args):
             shifted[shift:] = projection[:-shift]
         projection = shifted
 
-    if args.pixel_subsample != 1:
-        height, width = projection.shape
-        new_height = max(1, height // args.pixel_subsample)
-        new_width = max(1, width // args.pixel_subsample)
-        projection = zoom(
-            projection,
-            (new_height / height, new_width / width),
-            order=args.resize_order,
-        )
-        if projection.shape[0] > projection.shape[1]:
-            offset = (projection.shape[0] - projection.shape[1]) // 2
-            projection = projection[offset: projection.shape[0] - offset]
-        elif projection.shape[1] > projection.shape[0]:
-            offset = (projection.shape[1] - projection.shape[0]) // 2
-            projection = projection[:, offset: projection.shape[1] - offset]
-
-    projection *= np.float32(args.projection_scale)
-    if not np.isfinite(projection).all():
-        raise ValueError("Processed projection contains NaN or Inf")
-    return projection.astype(np.float32)
+    from types import SimpleNamespace
+    settings = SimpleNamespace(**vars(args))
+    settings.input_type, settings.clip_percentile, settings.shift_v = 'line_integral', 100., 0
+    settings.flat_field = False
+    return process_projection(projection, settings)
 
 
 def angles_from_config(config_path: Path, n_views: int):
@@ -99,17 +90,34 @@ def load_or_make_corrected(args):
     args.output_dir.mkdir(parents=True, exist_ok=True)
     corrected_path = args.output_dir / "corrected_all.npy"
     angles_path = args.output_dir / "angles_unique.npy"
-    if corrected_path.exists() and angles_path.exists() and not args.reprocess:
-        corrected = np.load(corrected_path).astype(np.float32)
-        angles = np.load(angles_path).astype(np.float32)
-        return corrected, angles
-
-    paths = sorted(args.input_dir.glob(args.projection_glob))
-    flat_paths = sorted(args.input_dir.glob(args.flat_glob))
+    paths = select_tiff_paths(args.input_dir, args.projection_glob)
+    flat_paths = select_tiff_paths(args.input_dir, args.flat_glob)
     if not paths:
         raise ValueError(f"No projection TIFF files matching {args.projection_glob}")
     if not flat_paths:
         raise ValueError(f"No flat-field TIFF files matching {args.flat_glob}")
+    from r2_gaussian.utils.artifact_utils import file_identity, identity, atomic_npy, atomic_json
+    parameters = {key: getattr(args, key) for key in ('dark_value', 'flat_eps', 'log_eps',
+        'shift_v', 'pixel_subsample', 'resize_order', 'projection_scale')}
+    inputs = paths + flat_paths + ([args.config] if args.config else [])
+    inputs += [Path(__file__), ROOT / 'scripts/fbp_preprocess.py']
+    signature = identity(dict(parameters=parameters, files=[file_identity(p) for p in inputs]))
+    sidecar = args.output_dir / '.corrected_cache.json'
+    cache_outputs = (corrected_path, angles_path, args.output_dir / 'flat_field_median.npy',
+                     args.output_dir / 'preprocess_meta.json')
+    try:
+        cached = json.loads(sidecar.read_text())
+    except (OSError, ValueError):
+        cached = {}
+    if (all(p.is_file() for p in cache_outputs) and not args.reprocess
+            and cached.get('signature') == signature
+            and cached.get('artifacts') == [file_identity(p) for p in cache_outputs]):
+        corrected = np.asarray(np.load(corrected_path), dtype=np.float32)
+        angles = np.asarray(np.load(angles_path), dtype=np.float32)
+        if (corrected.ndim != 3 or angles.ndim != 1 or not np.isfinite(corrected).all()
+                or not np.isfinite(angles).all() or len(corrected)-len(angles) not in (0,1)):
+            raise ValueError('Invalid corrected projection cache')
+        return corrected, angles
     raw_flat = np.stack([tifffile.imread(path) for path in flat_paths], axis=0)
     flat = np.median(raw_flat.astype(np.float32), axis=0)
     raw_paths = [tifffile.imread(path) for path in paths]
@@ -119,8 +127,8 @@ def load_or_make_corrected(args):
         angles = angles_all[:-1]
     else:
         angles = angles_all
-    np.save(corrected_path, corrected)
-    np.save(angles_path, angles)
+    atomic_npy(corrected_path, corrected)
+    atomic_npy(angles_path, angles)
     np.save(args.output_dir / "flat_field_median.npy", flat.astype(np.float32))
     with (args.output_dir / "preprocess_meta.json").open("w", encoding="utf-8") as handle:
         json.dump(
@@ -139,6 +147,7 @@ def load_or_make_corrected(args):
             handle,
             indent=2,
         )
+    atomic_json(sidecar, dict(signature=signature, artifacts=[file_identity(p) for p in cache_outputs]))
     return corrected, angles
 
 
@@ -159,9 +168,8 @@ def build_geometry(args, detector_shape, off_detector):
     geo.sVoxel = np.asarray(args.sVoxel[::-1], dtype=np.float32)
     geo.dVoxel = geo.sVoxel / geo.nVoxel
     geo.offOrigin = np.asarray(args.offOrigin[::-1], dtype=np.float32)
-    # ``off_detector`` is the project-wide [u, v] convention.  In particular,
-    # the rotation-center correction is off_detector[0] along detector columns.
-    geo.offDetector = np.asarray(off_detector, dtype=np.float32)
+    from r2_gaussian.utils.geometry_utils import tigre_detector_offset
+    geo.offDetector = tigre_detector_offset(off_detector)
     geo.accuracy = float(args.accuracy)
     geo.filter = args.filter
     return geo
@@ -205,7 +213,7 @@ def save_center_slices(volume, output_dir, prefix):
     output_dir.mkdir(parents=True, exist_ok=True)
     for axis, plane in planes.items():
         path = output_dir / f"{prefix}_center_{axis}.png"
-        plt.imsave(path, plane, cmap="gray", vmin=0.0, vmax=1.0)
+        plt.imsave(path, plane, origin="lower", cmap="gray", vmin=0.0, vmax=1.0)
     print(
         f"Saved {prefix} center slices to {output_dir} "
         f"(window {float(low):.6g} ~ {float(high):.6g})"

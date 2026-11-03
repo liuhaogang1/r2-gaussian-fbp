@@ -48,6 +48,11 @@ class InitDenoiseTests(unittest.TestCase):
                         "offOrigin": [0.1, -0.4, 0.9], "mode": "parallel"}
         self.metadata_path = self.dataset / "meta_data.json"
         self.metadata_path.write_text(json.dumps({"scanner": self.scanner}), encoding="utf-8")
+        (self.dataset / "proj_train").mkdir()
+        (self.dataset / "proj_test").mkdir()
+        np.save(self.dataset / "proj_train/000.npy", np.ones((8, 8), dtype=np.float32))
+        self.metadata_path.write_text(json.dumps({"scanner": self.scanner, "vol": "vol_fbp.npy",
+            "proj_train": [{"file_path": "proj_train/000.npy", "angle": 0.0}], "proj_test": []}), encoding="utf-8")
         self.canonical = self.dataset / "init_dataset.npy"
         np.save(self.canonical, np.array([[99, 98, 97, 96]], dtype=np.float32))
 
@@ -77,7 +82,18 @@ class InitDenoiseTests(unittest.TestCase):
             calls.append(command)
             if Path(command[1]).name == "init_from_fbp.py":
                 with mock.patch.object(sys, "argv", command[1:]):
-                    init.main()
+                    if "--use_train_fbp" in command:
+                        cached_volume = np.load(self.dataset / "vol_train_fbp.npy")
+                        with mock.patch.object(init, "reconstruct_from_train_views", return_value=cached_volume):
+                            init.main()
+                    else:
+                        init.main()
+            elif Path(command[1]).name == "train.py":
+                model = Path(command[command.index("-m") + 1])
+                points = model / "point_cloud/iteration_30000"
+                points.mkdir(parents=True, exist_ok=True)
+                (points / "point_cloud.pickle").write_bytes(b"training stand-in")
+                (model / "cfg_args").write_text("training stand-in")
             return mock.Mock(returncode=0)
 
         with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(

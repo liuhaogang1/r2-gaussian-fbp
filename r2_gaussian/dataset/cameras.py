@@ -99,7 +99,7 @@ class Camera(nn.Module):
         if self.mode != 0:
             raise ValueError("Parallel pose calibration requires mode='parallel'.")
         self.parallel_pose = pose_model
-        self.pose_index = int(pose_index)
+        self.pose_index = None if pose_index is None else int(pose_index)
 
     def attach_cone_pose(self, pose_model, pose_index):
         if self.mode != 1:
@@ -130,6 +130,45 @@ class Camera(nn.Module):
         r[0, 0], r[0, 1] = c, -s
         r[1, 0], r[1, 1] = s, c
         return r
+
+    def _correct_parallel_c2w(self, values, device):
+        """Apply parallel-beam corrections in conventional camera-to-world form.
+
+        The rasterizer stores view matrices transposed.  Convert that storage
+        representation back to a conventional C2W matrix before composing
+        world-frame and camera-local rotations; transpose it again when the
+        corrected W2C matrix is stored for the rasterizer.
+        """
+        corrected_c2w = torch.transpose(
+            torch.linalg.inv(self._base_world_view_transform), 0, 1
+        )
+
+        # A scan-angle error rotates the complete acquisition pose around the
+        # scanner's world Z axis, including the camera center's circular path.
+        delta_angle = values["delta_angle"]
+        if delta_angle is not None and self.pose_index is not None:
+            corrected_c2w = (
+                self._rot_z(delta_angle[self.pose_index], device) @ corrected_c2w
+            )
+
+        # Beam tilt changes the ray direction about detector-local U/V axes,
+        # while keeping the camera center fixed.
+        beam_tilt = values["beam_tilt"]
+        if beam_tilt is not None:
+            corrected_c2w = (
+                corrected_c2w
+                @ self._rot_x(beam_tilt[0], device)
+                @ self._rot_y(beam_tilt[1], device)
+            )
+
+        # Detector roll rotates its U/V axes around the local beam axis only.
+        detector_roll = values["detector_roll"]
+        if detector_roll is not None:
+            corrected_c2w = corrected_c2w @ self._rot_z(
+                detector_roll[0], device
+            )
+
+        return corrected_c2w
 
     def refresh_parameters(self):
         """Refresh differentiable camera matrices for parallel calibration."""
@@ -189,36 +228,13 @@ class Camera(nn.Module):
 
         values = self.parallel_pose.values()
         device = self._base_world_view_transform.device
-        base_c2w = torch.linalg.inv(self._base_world_view_transform)
-        corrected_c2w = base_c2w
-
-        delta_angle = values["delta_angle"]
-        if delta_angle is not None:
-            corrected_c2w = self._rot_z(
-                delta_angle[self.pose_index], device
-            ) @ corrected_c2w
-
-        beam_tilt = values["beam_tilt"]
-        if beam_tilt is not None:
-            corrected_c2w = (
-                self._rot_y(beam_tilt[1], device)
-                @ self._rot_x(beam_tilt[0], device)
-                @ corrected_c2w
-            )
-
-        detector_roll = values["detector_roll"]
-        if detector_roll is not None:
-            # Roll is defined in the camera-local frame.
-            corrected_c2w = corrected_c2w @ self._rot_z(
-                detector_roll[0], device
-            )
-
-        self.world_view_transform = torch.linalg.inv(corrected_c2w)
+        corrected_c2w = self._correct_parallel_c2w(values, device)
+        self.world_view_transform = torch.linalg.inv(corrected_c2w).transpose(0, 1)
 
         shift_pixels = torch.zeros(2, device=device)
         if values["global_shift"] is not None:
             shift_pixels = shift_pixels + values["global_shift"]
-        if values["view_shift"] is not None:
+        if values["view_shift"] is not None and self.pose_index is not None:
             shift_pixels = shift_pixels + values["view_shift"][self.pose_index]
 
         d_detector = torch.as_tensor(
@@ -238,18 +254,68 @@ class Camera(nn.Module):
             .bmm(self.projection_matrix.unsqueeze(0))
             .squeeze(0)
         )
-        self.camera_center = self.world_view_transform.inverse()[3, :3]
+        self.camera_center = corrected_c2w[:3, 3]
 
     @staticmethod
     def _rotation_matrix_to_quaternion(matrix):
         # Quaternion layout matches the target repository: [w, x, y, z].
+        # Select a numerically stable branch for the whole rotation range;
+        # the trace-only formula is singular for 180-degree rotations.
         trace = matrix.trace()
         w = torch.sqrt(torch.clamp(trace + 1.0, min=1.0e-8)) / 2.0
         denom = 4.0 * w + 1.0e-8
-        x = (matrix[2, 1] - matrix[1, 2]) / denom
-        y = (matrix[0, 2] - matrix[2, 0]) / denom
-        z = (matrix[1, 0] - matrix[0, 1]) / denom
-        return torch.stack((w, x, y, z))
+        q_trace = torch.stack(
+            (
+                w,
+                (matrix[2, 1] - matrix[1, 2]) / denom,
+                (matrix[0, 2] - matrix[2, 0]) / denom,
+                (matrix[1, 0] - matrix[0, 1]) / denom,
+            )
+        )
+
+        diagonal = torch.diagonal(matrix)
+        dominant = torch.argmax(diagonal)
+
+        sx = 2.0 * torch.sqrt(
+            torch.clamp(1.0 + matrix[0, 0] - matrix[1, 1] - matrix[2, 2], min=1.0e-8)
+        )
+        qx = torch.stack(
+            (
+                (matrix[2, 1] - matrix[1, 2]) / sx,
+                sx / 4.0,
+                (matrix[0, 1] + matrix[1, 0]) / sx,
+                (matrix[0, 2] + matrix[2, 0]) / sx,
+            )
+        )
+        sy = 2.0 * torch.sqrt(
+            torch.clamp(1.0 - matrix[0, 0] + matrix[1, 1] - matrix[2, 2], min=1.0e-8)
+        )
+        qy = torch.stack(
+            (
+                (matrix[0, 2] - matrix[2, 0]) / sy,
+                (matrix[0, 1] + matrix[1, 0]) / sy,
+                sy / 4.0,
+                (matrix[1, 2] + matrix[2, 1]) / sy,
+            )
+        )
+        sz = 2.0 * torch.sqrt(
+            torch.clamp(1.0 - matrix[0, 0] - matrix[1, 1] + matrix[2, 2], min=1.0e-8)
+        )
+        qz = torch.stack(
+            (
+                (matrix[1, 0] - matrix[0, 1]) / sz,
+                (matrix[0, 2] + matrix[2, 0]) / sz,
+                (matrix[1, 2] + matrix[2, 1]) / sz,
+                sz / 4.0,
+            )
+        )
+        q_diagonal = torch.where(
+            dominant == 0,
+            qx,
+            torch.where(dominant == 1, qy, qz),
+        )
+        quaternion = torch.where(trace > 0.0, q_trace, q_diagonal)
+        return torch.nn.functional.normalize(quaternion, dim=0)
 
     @staticmethod
     def _quaternion_to_rotation_matrix(quaternion):

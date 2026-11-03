@@ -90,16 +90,39 @@ def load_initial_volume(args: argparse.Namespace) -> tuple[np.ndarray, Path]:
             if args.fbp_output is not None
             else dataset / "vol_train_fbp.npy"
         )
-        if fbp_output.exists():
+        from r2_gaussian.utils.artifact_utils import (
+            dataset_identity, file_identity, atomic_npy, atomic_json, npy_path,
+        )
+        fbp_output = npy_path(fbp_output)
+        sidecar = fbp_output.with_suffix(".cache.json")
+        root = Path(__file__).resolve().parent
+        signature = {"version": 2, "dataset": dataset_identity(dataset),
+                     "method": "physical_train_fbp",
+                     "implementation": [file_identity(root / name) for name in (
+                         'init_from_fbp.py', 'r2_gaussian/utils/ct_utils.py',
+                         'r2_gaussian/utils/geometry_utils.py')]}
+        try:
+            cached = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cached = {}
+        valid_cache = (fbp_output.exists() and cached.get("signature") == signature
+                       and cached.get("artifact") == file_identity(fbp_output))
+        if valid_cache:
             print(f"Load cached train-view FBP volume: {fbp_output}")
             volume = np.asarray(np.load(fbp_output), dtype=np.float32)
         else:
             print(f"Reconstruct train-view FBP volume from: {dataset}")
             volume = reconstruct_from_train_views(dataset)
             fbp_output.parent.mkdir(parents=True, exist_ok=True)
-            np.save(fbp_output, volume)
+            if volume.ndim != 3 or not np.isfinite(volume).all():
+                raise ValueError("Train-view FBP must be a finite 3D volume")
+            expected = tuple(dataset_shape_from_metadata(dataset))
+            if expected and volume.shape != expected:
+                raise ValueError("Train-view FBP shape does not match scanner nVoxel")
+            atomic_npy(fbp_output, volume)
+            atomic_json(sidecar, {"signature": signature, "artifact": file_identity(fbp_output)})
             print(f"Saved train-view FBP cache to {fbp_output}")
-        if volume.ndim != 3:
+        if volume.ndim != 3 or not np.isfinite(volume).all():
             raise ValueError(f"Expected a 3D FBP volume, got {volume.shape}")
         expected_shape = tuple(int(value) for value in dataset_shape_from_metadata(dataset))
         if expected_shape and volume.shape != expected_shape:
@@ -148,13 +171,7 @@ def save_fbp_nifti(
     scanner_cfg: dict,
 ) -> None:
     """Save the complete train-view FBP volume as a Slicer-viewable NIfTI."""
-    try:
-        import SimpleITK as sitk
-    except ModuleNotFoundError as error:
-        raise SystemExit(
-            "SimpleITK is required for --visualize_fbp_nii. "
-            "Install it with: python -m pip install SimpleITK"
-        ) from error
+    from r2_gaussian.utils.volume_export_utils import save_nifti_xyz
 
     volume = np.asarray(volume, dtype=np.float32)
     if volume.ndim != 3:
@@ -162,19 +179,7 @@ def save_fbp_nifti(
     volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
     volume = np.clip(volume, 0.0, None)
 
-    s_voxel = np.asarray(scanner_cfg.get("sVoxel"), dtype=np.float64)
-    if s_voxel.shape != (3,) or not np.all(np.isfinite(s_voxel)) or np.any(s_voxel <= 0):
-        raise ValueError("Scanner metadata must contain three positive sVoxel values")
-    spacing = tuple(
-        float(size) / float(count) for size, count in zip(s_voxel, volume.shape)
-    )
-
-    # The project stores volumes as [X, Y, Z]; match prepare_fbp_tiff.py when
-    # converting to the [Z, X, Y] array convention used by SimpleITK here.
-    image = sitk.GetImageFromArray(volume.transpose(2, 0, 1))
-    image.SetSpacing(spacing)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    sitk.WriteImage(image, str(output))
+    save_nifti_xyz(volume, scanner_cfg, output)
     print(f"Saved train-view FBP NIfTI to {output}")
 
 
@@ -212,12 +217,16 @@ def save_initialization_slices(
             panel = panels[row, col]
             panel.imshow(
                 np.take(volume, index, axis=axis).T,
+                origin="lower",
                 cmap="gray",
                 vmin=0.0,
                 vmax=vmax,
                 interpolation="nearest",
             )
             panel.set_title(f"{axis_name} {index}", fontsize=10)
+            horizontal, vertical = (("Y", "Z"), ("X", "Z"), ("X", "Y"))[axis]
+            panel.set_xlabel(horizontal)
+            panel.set_ylabel(vertical)
             panel.set_xticks([])
             panel.set_yticks([])
     figure.tight_layout()
@@ -449,6 +458,10 @@ def main():
 
     canonical_output = volume_path.parent / f"init_{volume_path.parent.name}.npy"
     output = args.output if args.output is not None else canonical_output
+    from r2_gaussian.utils.artifact_utils import npy_path
+    output = npy_path(output)
+    if output.resolve() == volume_path.resolve():
+        raise ValueError('Initialization point output must not overwrite its source volume')
     output.parent.mkdir(parents=True, exist_ok=True)
     np.save(output, point_cloud)
     print(f"Saved {point_cloud.shape[0]} points to {output}")

@@ -21,7 +21,6 @@ import concurrent.futures
 import yaml
 from argparse import ArgumentParser
 from random import randint
-import SimpleITK as sitk
 
 sys.path.append("./")
 from r2_gaussian.arguments import (
@@ -33,6 +32,7 @@ from r2_gaussian.dataset import Scene
 from r2_gaussian.gaussian import GaussianModel, render, query, initialize_gaussian
 from r2_gaussian.utils.general_utils import safe_state, t2a
 from r2_gaussian.utils.image_utils import metric_vol, metric_proj
+from r2_gaussian.utils.volume_export_utils import save_nifti_xyz
 from r2_gaussian.pose import StaticConePose, StaticParallelPose
 
 
@@ -51,7 +51,19 @@ def testing(
         shuffle=False,
     )
 
+    gaussians = GaussianModel(None)
+    loaded_iter = initialize_gaussian(gaussians, dataset, iteration)
+    scene.gaussians = gaussians
+    pose_root = osp.join(dataset.model_path, "pose_calibration")
+    snapshot = osp.join(pose_root, f"iteration_{loaded_iter}", "pose_offsets.npz")
+    if pose_result is None and osp.exists(snapshot):
+        pose_result = snapshot
+    if pose_result is None and (osp.exists(osp.join(pose_root, "pose_required.json"))
+                                or osp.exists(osp.join(pose_root, "pose_offsets.npz"))):
+        raise ValueError("No matching pose snapshot for the selected Gaussian iteration")
     if pose_result:
+        from r2_gaussian.pose.artifacts import validate_pose_file
+        pose_indices = validate_pose_file(pose_result, scene, loaded_iter)
         scanner_mode = scene.scanner_cfg.get("mode")
         if scanner_mode == "parallel":
             static_pose = StaticParallelPose.from_npz(pose_result)
@@ -71,7 +83,11 @@ def testing(
                     f"{len(scene.train_cameras)} training views."
                 )
             for pose_index, camera in enumerate(scene.train_cameras):
-                camera.attach_parallel_pose(static_pose, pose_index)
+                camera.attach_parallel_pose(static_pose, pose_indices[pose_index])
+            # Keep the learned shared geometry for held-out views, but do not
+            # apply train-only angle/shift arrays to an unrelated view index.
+            for camera in scene.test_cameras:
+                camera.attach_parallel_pose(static_pose, None)
         elif scanner_mode == "cone":
             static_pose = StaticConePose.from_npz(pose_result)
             values = static_pose.values()
@@ -84,15 +100,10 @@ def testing(
                     f"{len(scene.train_cameras)} training views."
                 )
             for pose_index, camera in enumerate(scene.train_cameras):
-                camera.attach_cone_pose(static_pose, pose_index)
+                camera.attach_cone_pose(static_pose, pose_indices[pose_index])
         else:
             raise ValueError(f"Unsupported scanner mode: {scanner_mode!r}")
         pipeline.pose_enabled = True
-
-    # Set up Gaussians
-    gaussians = GaussianModel(None)  # scale_bound will be loaded later
-    loaded_iter = initialize_gaussian(gaussians, dataset, iteration)
-    scene.gaussians = gaussians
 
     save_path = osp.join(
         dataset.model_path,
@@ -101,7 +112,7 @@ def testing(
     )
 
     # Evaluate projection train
-    if not skip_render_train:
+    if not skip_render_train and scene.getTrainCameras():
         evaluate_render(
             save_path,
             "render_train",
@@ -110,7 +121,7 @@ def testing(
             pipeline,
         )
     # Evaluate projection test
-    if not skip_render_test:
+    if not skip_render_test and scene.getTestCameras():
         evaluate_render(
             save_path,
             "render_test",
@@ -118,6 +129,10 @@ def testing(
             gaussians,
             pipeline,
         )
+    if not skip_render_test and not scene.getTestCameras():
+        os.makedirs(save_path, exist_ok=True)
+        with open(osp.join(save_path, "eval2d_render_test.yml"), "w") as stream:
+            yaml.safe_dump({"status": "skipped", "reason": "no test views", "n_views": 0}, stream)
     # Evaluate volume reconstruction
     if not skip_recon:
         evaluate_volume(
@@ -127,7 +142,15 @@ def testing(
             gaussians,
             pipeline,
             scene.vol_gt,
+            scene_scale=scene.scene_scale,
         )
+    from r2_gaussian.utils.artifact_utils import atomic_json
+    atomic_json(osp.join(save_path, "evaluation_status.json"), {
+        "iteration": loaded_iter, "n_train": len(scene.getTrainCameras()),
+        "n_test": len(scene.getTestCameras()),
+        "render_train": not skip_render_train, "render_test": not skip_render_test,
+        "reconstruction": not skip_recon, "status": "completed",
+    })
 
 
 def evaluate_volume(
@@ -137,6 +160,7 @@ def evaluate_volume(
     gaussians: GaussianModel,
     pipeline: PipelineParams,
     vol_gt,
+    scene_scale=1.0,
 ):
     """Evaluate volume reconstruction."""
     slice_save_path = osp.join(save_path, name)
@@ -158,11 +182,13 @@ def evaluate_volume(
         [vol_gt[..., i][None] for i in range(vol_gt.shape[2])],
         slice_save_path,
         "_gt",
+        display_xy=True,
     )
     multithread_write(
         [vol_pred[..., i][None] for i in range(vol_pred.shape[2])],
         slice_save_path,
         "_pred",
+        display_xy=True,
     )
     eval_dict = {
         "psnr_3d": psnr_3d,
@@ -177,23 +203,13 @@ def evaluate_volume(
 
     np.save(osp.join(save_path, "vol_gt.npy"), t2a(vol_gt))
     np.save(osp.join(save_path, "vol_pred.npy"), t2a(vol_pred))
-    # For visualization with 3D slicer
-    voxel_spacing = tuple(
-        float(size) / float(count)
-        for size, count in zip(scanner_cfg["sVoxel"], scanner_cfg["nVoxel"])
-    )
-    gt_image = sitk.GetImageFromArray(t2a(vol_gt).transpose(2, 0, 1))
-    gt_image.SetSpacing(voxel_spacing)
-    sitk.WriteImage(
-        gt_image,
-        os.path.join(save_path, "vol_gt.nii.gz"),
-    )
-    pred_image = sitk.GetImageFromArray(t2a(vol_pred).transpose(2, 0, 1))
-    pred_image.SetSpacing(voxel_spacing)
-    sitk.WriteImage(
-        pred_image,
-        os.path.join(save_path, "vol_pred.nii.gz"),
-    )
+    # Restore dataset lengths; leave density values and query coordinates intact.
+    export_scanner = {
+        "sVoxel": (np.asarray(scanner_cfg["sVoxel"]) / scene_scale).tolist(),
+        "offOrigin": (np.asarray(scanner_cfg["offOrigin"]) / scene_scale).tolist(),
+    }
+    save_nifti_xyz(t2a(vol_gt), export_scanner, osp.join(save_path, "vol_gt.nii.gz"))
+    save_nifti_xyz(t2a(vol_pred), export_scanner, osp.join(save_path, "vol_pred.nii.gz"))
 
     print(f"{name} complete. psnr_3d: {psnr_3d}, ssim_3d: {ssim_3d}")
 
@@ -235,13 +251,14 @@ def evaluate_render(save_path, name, views, gaussians, pipeline):
     )
 
 
-def multithread_write(image_list, path, suffix):
+def multithread_write(image_list, path, suffix, display_xy=False):
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=None)
 
     def write_image(image, count, path):
         try:
             torchvision.utils.save_image(
-                image, osp.join(path, "{0:05d}".format(count) + "{}.png".format(suffix))
+                torch.flip(image.transpose(-2, -1), dims=(-2,)) if display_xy else image,
+                osp.join(path, "{0:05d}".format(count) + "{}.png".format(suffix))
             )
             np.save(
                 osp.join(path, "{0:05d}".format(count) + "{}.npy".format(suffix)),
@@ -275,7 +292,7 @@ if __name__ == "__main__":
         "--pose_result",
         type=str,
         default=None,
-        help="Optional pose_calibration/pose_offsets.npz for train-view rendering.",
+        help="Optional pose_calibration/pose_offsets.npz; per-view corrections apply to training views, shared corrections also apply to held-out views.",
     )
     args = get_combined_args(parser)
 
@@ -289,5 +306,5 @@ if __name__ == "__main__":
             args.skip_render_train,
             args.skip_render_test,
             args.skip_recon,
-            args.pose_result,
+            getattr(args, "pose_result", None),
         )

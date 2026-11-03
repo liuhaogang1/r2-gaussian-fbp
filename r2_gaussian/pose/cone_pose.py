@@ -62,8 +62,9 @@ class StaticConePose:
     def from_npz(cls, path, device="cuda"):
         import numpy as np
 
-        data = np.load(path)
-        return cls({key: data[key] for key in data.files}, device=device)
+        with np.load(path, allow_pickle=False) as data:
+            return cls({key: data[key] for key in ("delta_translation", "delta_quaternion")
+                        if key in data}, device=device)
 
     def values(self):
         return self._values

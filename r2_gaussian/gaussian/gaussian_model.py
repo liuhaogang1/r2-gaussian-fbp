@@ -71,13 +71,16 @@ class GaussianModel:
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
+        # Optional shape-ablation bookkeeping.  It is inactive unless the
+        # training loop enables shape regularization.
+        self.shape_bad_count = None
         self.optimizer = None
         self.spatial_lr_scale = 0
         self.scale_bound = scale_bound
         self.setup_functions()
 
     def capture(self):
-        return (
+        captured = (
             self._xyz,
             self._scaling,
             self._rotation,
@@ -89,8 +92,14 @@ class GaussianModel:
             self.spatial_lr_scale,
             self.scale_bound,
         )
+        if self.shape_bad_count is not None:
+            captured += (self.shape_bad_count,)
+        return captured
 
     def restore(self, model_args, training_args):
+        restored_shape_bad_count = None
+        if len(model_args) >= 11:
+            restored_shape_bad_count = model_args[10]
         (
             self._xyz,
             self._scaling,
@@ -102,12 +111,16 @@ class GaussianModel:
             opt_dict,
             self.spatial_lr_scale,
             self.scale_bound,
-        ) = model_args
+        ) = model_args[:10]
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
         self.optimizer.load_state_dict(opt_dict)
         self.setup_functions()  # Reset activation functions
+        if restored_shape_bad_count is not None:
+            self.shape_bad_count = restored_shape_bad_count.to(self._xyz.device)
+        else:
+            self.shape_bad_count = None
 
     @property
     def get_scaling(self):
@@ -132,6 +145,7 @@ class GaussianModel:
 
     def create_from_pcd(self, xyz, density, spatial_lr_scale: float):
         self.spatial_lr_scale = spatial_lr_scale
+        self.shape_bad_count = None
 
         fused_point_cloud = torch.tensor(xyz).float().cuda()
         print(
@@ -188,6 +202,8 @@ class GaussianModel:
     def training_setup(self, training_args):
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        if self.shape_bad_count is not None and self.shape_bad_count.shape[0] != self.get_xyz.shape[0]:
+            self.shape_bad_count = None
 
         l = [
             {
@@ -315,19 +331,36 @@ class GaussianModel:
             ).requires_grad_(True)
         )
         self.scale_bound = data["scale_bound"]
+        self.shape_bad_count = None
         self.setup_functions()  # Reset activation functions
 
-    def replace_tensor_to_optimizer(self, tensor, name):
+    def replace_tensor_to_optimizer(self, tensor, name, reset_mask=None):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
             if group["name"] == name:
                 stored_state = self.optimizer.state.get(group["params"][0], None)
-                stored_state["exp_avg"] = torch.zeros_like(tensor)
-                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                if stored_state is not None:
+                    if reset_mask is None:
+                        stored_state["exp_avg"] = torch.zeros_like(tensor)
+                        stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                    else:
+                        reset_mask = reset_mask.to(device=tensor.device, dtype=torch.bool)
+                        state_mask = reset_mask.reshape(
+                            (reset_mask.shape[0],) + (1,) * (tensor.ndim - 1)
+                        )
+                        stored_state["exp_avg"] = torch.where(
+                            state_mask, torch.zeros_like(stored_state["exp_avg"]),
+                            stored_state["exp_avg"],
+                        )
+                        stored_state["exp_avg_sq"] = torch.where(
+                            state_mask, torch.zeros_like(stored_state["exp_avg_sq"]),
+                            stored_state["exp_avg_sq"],
+                        )
 
-                del self.optimizer.state[group["params"][0]]
+                    del self.optimizer.state[group["params"][0]]
                 group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
-                self.optimizer.state[group["params"][0]] = stored_state
+                if stored_state is not None:
+                    self.optimizer.state[group["params"][0]] = stored_state
 
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
@@ -367,6 +400,8 @@ class GaussianModel:
 
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
+        if self.shape_bad_count is not None:
+            self.shape_bad_count = self.shape_bad_count[valid_points_mask]
 
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
@@ -426,6 +461,103 @@ class GaussianModel:
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.cat([self.max_radii2D, new_max_radii2D], dim=-1)
+        if self.shape_bad_count is not None:
+            self.shape_bad_count = torch.cat(
+                [self.shape_bad_count,
+                 torch.zeros(new_xyz.shape[0], device=new_xyz.device, dtype=torch.long)]
+            )
+
+    def enable_shape_tracking(self):
+        """Initialize per-Gaussian persistent severe-shape counters."""
+        self.shape_bad_count = torch.zeros(
+            self.get_xyz.shape[0], device=self.get_xyz.device, dtype=torch.long
+        )
+
+    def shape_repair(self, mask, needle_threshold, sheet_threshold, max_density_gain=4.0,
+                     needle_enabled=True, sheet_enabled=True):
+        """Clamp severe axes while approximately preserving Gaussian mass."""
+        if not mask.any():
+            return 0
+        scales = self.get_scaling.detach()
+        repaired = scales.clone()
+        order = torch.argsort(scales, dim=1)
+        short = order[:, 0]
+        middle = order[:, 1]
+        long = order[:, 2]
+        rows = torch.arange(scales.shape[0], device=scales.device)
+        target_middle = scales[rows, short] * float(sheet_threshold)
+        needle = (scales[rows, long] / scales[rows, middle]) > float(needle_threshold)
+        sheet = (scales[rows, middle] / scales[rows, short]) > float(sheet_threshold)
+        new_middle = torch.minimum(scales[rows, middle], target_middle)
+        final_middle = new_middle if sheet_enabled else scales[rows, middle]
+        new_long = torch.minimum(scales[rows, long], final_middle * float(needle_threshold))
+        if needle_enabled:
+            repaired[rows, long] = new_long
+        if sheet_enabled:
+            repaired[rows, middle] = torch.where(sheet, new_middle, scales[rows, middle])
+        old_volume = torch.prod(scales, dim=1)
+        new_volume = torch.prod(repaired, dim=1).clamp_min(1e-12)
+        density = self.get_density.detach()
+        density_new = density * (old_volume / new_volume)[:, None]
+        density_new = torch.minimum(density_new, density * float(max_density_gain))
+        scale_param = self.scaling_inverse_activation(repaired)
+        density_param = density_new + torch.log(-torch.expm1(-density_new))
+        valid = torch.isfinite(scale_param).all(dim=1) & torch.isfinite(density_param).all(dim=1)
+        mask = mask & valid
+        if not mask.any():
+            return 0
+        scale_param = torch.where(mask[:, None], scale_param, self._scaling.detach())
+        density_param = torch.where(mask[:, None], density_param, self._density.detach())
+        self._scaling = self.replace_tensor_to_optimizer(
+            scale_param, "scaling", reset_mask=mask
+        )["scaling"]
+        self._density = self.replace_tensor_to_optimizer(
+            density_param, "density", reset_mask=mask
+        )["density"]
+        self.shape_bad_count[mask] = 0
+        return int(mask.sum().item())
+
+    def shape_split(self, mask, children=2):
+        """Split selected elongated Gaussians along their longest local axis."""
+        if not mask.any() or children < 2:
+            return 0
+        selected = torch.nonzero(mask, as_tuple=False).flatten()
+        scales = self.get_scaling.detach()[selected]
+        rotations = self._rotation.detach()[selected]
+        rot_mats = build_rotation(rotations)
+        long_axis = torch.argmax(scales, dim=1)
+        local_axis = torch.zeros((selected.shape[0], 3), device=scales.device)
+        local_axis[torch.arange(selected.shape[0], device=scales.device), long_axis] = 1.0
+        world_axis = torch.bmm(rot_mats, local_axis.unsqueeze(-1)).squeeze(-1)
+        offsets = torch.linspace(-0.35, 0.35, children, device=scales.device)
+        new_xyz = (self.get_xyz[selected, None, :] + world_axis[:, None, :] *
+                   (scales[torch.arange(selected.shape[0], device=scales.device), long_axis][:, None, None] * offsets[None, :, None])).reshape(-1, 3)
+        row_index = torch.arange(scales.shape[0], device=scales.device)
+        axis_factor = torch.ones_like(scales)
+        axis_factor[row_index, long_axis] = 1.0 / float(children)
+        new_scales = (scales * axis_factor)[:, None, :].repeat(1, children, 1)
+        new_scales = new_scales.reshape(-1, 3)
+        scale_param = self.scaling_inverse_activation(new_scales)
+        valid = torch.isfinite(scale_param).reshape(-1, children, 3).all(dim=2).all(dim=1)
+        if not valid.all():
+            safe_mask = torch.zeros_like(mask)
+            safe_mask[selected[valid]] = True
+            return self.shape_split(safe_mask, children) if safe_mask.any() else 0
+        # Each child has roughly 1/children of the parent volume, so retaining
+        # the parent's peak density approximately preserves summed Gaussian mass.
+        new_density = self.get_density[selected].repeat_interleave(children, dim=0)
+        new_rotation = rotations.repeat_interleave(children, dim=0)
+        new_radii = self.max_radii2D[selected].repeat_interleave(children)
+        self.densification_postfix(
+            new_xyz,
+            new_density + torch.log(-torch.expm1(-new_density)),
+            scale_param,
+            new_rotation,
+            new_radii,
+        )
+        prune = torch.cat([mask, torch.zeros(new_xyz.shape[0], device=mask.device, dtype=torch.bool)])
+        self.prune_points(prune)
+        return int(selected.shape[0])
 
     def densify_and_split(self, grads, grad_threshold, densify_scale_threshold, N=2):
         n_init_points = self.get_xyz.shape[0]

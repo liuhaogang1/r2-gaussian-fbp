@@ -40,13 +40,13 @@ class VolumeOutputTests(unittest.TestCase):
                 save_nifti_streaming(volume, self.spacing, self.origin, path)
                 with gzip.open(path, "rb") as handle:
                     payload = handle.read()
-                nifti_shape = (self.shape[1], self.shape[0], self.shape[2])
+                nifti_shape = self.shape
                 self.assertEqual(struct.unpack_from("<i", payload)[0], 348)
                 self.assertEqual(struct.unpack_from("<8h", payload, 40), (3, *nifti_shape, 1, 1, 1, 1))
                 self.assertEqual(struct.unpack_from("<2h", payload, 70), (16, 32))
                 self.assertEqual(payload[344:352], b"n+1\x00\x00\x00\x00\x00")
                 actual = np.frombuffer(payload, dtype="<f4", offset=352).reshape(nifti_shape, order="F")
-                np.testing.assert_array_equal(actual, volume.transpose(1, 0, 2))
+                np.testing.assert_array_equal(actual, volume)
                 del volume
 
     @unittest.skipIf(sitk is None, "SimpleITK is not installed")
@@ -55,27 +55,27 @@ class VolumeOutputTests(unittest.TestCase):
         path = self.root / "slicer.nii.gz"
         save_nifti_streaming(volume, self.spacing, self.origin, path)
         image = sitk.ReadImage(str(path))
-        self.assertEqual(image.GetSize(), (self.shape[1], self.shape[0], self.shape[2]))
+        self.assertEqual(image.GetSize(), self.shape)
         np.testing.assert_allclose(image.GetSpacing(), self.spacing, rtol=1e-6)
         np.testing.assert_allclose(image.GetOrigin(), self.origin, rtol=1e-6)
         np.testing.assert_allclose(image.GetDirection(), np.eye(3).ravel(), atol=1e-6)
-        np.testing.assert_array_equal(sitk.GetArrayFromImage(image), volume.transpose(2, 0, 1))
-        for index in ((0, 0, 0), (8, 6, 4), (4, 3, 2)):
+        np.testing.assert_array_equal(sitk.GetArrayFromImage(image), volume.transpose(2, 1, 0))
+        for index in ((0, 0, 0), (6, 8, 4), (3, 4, 2)):
             expected = np.asarray(self.origin) + np.asarray(index) * self.spacing
             np.testing.assert_allclose(image.TransformIndexToPhysicalPoint(index), expected, rtol=1e-6)
             i, j, k = index
-            self.assertEqual(image.GetPixel(index), float(volume[j, i, k]))
+            self.assertEqual(image.GetPixel(index), float(volume[i, j, k]))
         del volume
 
     @unittest.skipIf(sitk is None, "SimpleITK is not installed")
-    def test_matches_original_test_py_nifti_writer(self):
+    def test_matches_xyz_simpleitk_reference(self):
         # A non-cubic asymmetric phantom catches an XY swap even when the
         # original workflow normally uses cubic volumes and isotropic voxels.
         for dtype in ("float32", "float16"):
             with self.subTest(dtype=dtype):
                 volume = self.mapped_volume(dtype)
                 original = sitk.GetImageFromArray(
-                    np.asarray(volume, dtype=np.float32).transpose(2, 0, 1)
+                    np.asarray(volume, dtype=np.float32).transpose(2, 1, 0)
                 )
                 original.SetSpacing(self.spacing)
                 original.SetOrigin(self.origin)

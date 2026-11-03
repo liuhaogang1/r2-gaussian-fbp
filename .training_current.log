@@ -1,0 +1,874 @@
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:13]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:13]
+Loading Training Cameras [03/11 00:10:13]
+Loading Test Cameras [03/11 00:10:13]
+Initialize Gaussians with init_points.npy [03/11 00:10:13]
+Initialize gaussians from 400 estimated points [03/11 00:10:13]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+[ITER 6] Saving Gaussians [03/11 00:10:14]
+[ITER 6] Evaluating: psnr3d 18.608, ssim3d 0.935, psnr2d 25.482, ssim2d 0.947 [03/11 00:10:14]
+Final Gaussian count: 400 [03/11 00:10:14]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_training_v4\parallel\training_summary.json [03/11 00:10:14]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:14]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:14]
+Loading Training Cameras [03/11 00:10:14]
+Loading Test Cameras [03/11 00:10:14]
+Loading trained model at iteration 6 [03/11 00:10:14]
+
+render render_train:   0%|          | 0/20 [00:00<?, ?it/s]
+                                                           
+render_train complete. psnr_2d: 25.785594940185547, ssim_2d: 0.9483192563056946. [03/11 00:10:14]
+
+render render_test:   0%|          | 0/8 [00:00<?, ?it/s]
+                                                         
+render_test complete. psnr_2d: 25.482315063476562, ssim_2d: 0.9470526576042175. [03/11 00:10:14]
+reconstruction complete. psnr_3d: 18.607627868652344, ssim_3d: 0.9346923033396403 [03/11 00:10:14]
+PASS_RUN parallel {'adam_steps': 5, 'densify_calls': 0, 'sparse_queries': 0, 'shape_repaired': 0, 'shape_split': 0, 'shape_pruned': 0} [03/11 00:10:14]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:14] [03/11 00:10:14]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:14] [03/11 00:10:14]
+Loading Training Cameras [03/11 00:10:14] [03/11 00:10:14]
+Loading Test Cameras [03/11 00:10:14] [03/11 00:10:14]
+Initialize Gaussians with init_points.npy [03/11 00:10:14] [03/11 00:10:14]
+Initialize gaussians from 400 estimated points [03/11 00:10:14] [03/11 00:10:14]
+Use total variation loss [03/11 00:10:14] [03/11 00:10:14]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+[ITER 6] Saving Gaussians [03/11 00:10:14] [03/11 00:10:14]
+Final Gaussian count: 400 [03/11 00:10:14] [03/11 00:10:14]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_training_v4\tv\training_summary.json [03/11 00:10:14] [03/11 00:10:14]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:14] [03/11 00:10:14]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:14] [03/11 00:10:14]
+Loading Training Cameras [03/11 00:10:14] [03/11 00:10:14]
+Loading Test Cameras [03/11 00:10:14] [03/11 00:10:14]
+Loading trained model at iteration 6 [03/11 00:10:14] [03/11 00:10:14]
+
+render render_train:   0%|          | 0/20 [00:00<?, ?it/s]
+                                                           
+render_train complete. psnr_2d: 25.785608291625977, ssim_2d: 0.9483196139335632. [03/11 00:10:14] [03/11 00:10:14]
+
+render render_test:   0%|          | 0/8 [00:00<?, ?it/s]
+                                                         
+render_test complete. psnr_2d: 25.482297897338867, ssim_2d: 0.9470530152320862. [03/11 00:10:14] [03/11 00:10:14]
+reconstruction complete. psnr_3d: 18.60767936706543, ssim_3d: 0.9346926808357239 [03/11 00:10:15] [03/11 00:10:15]
+PASS_RUN tv {'adam_steps': 5, 'densify_calls': 0, 'sparse_queries': 0, 'shape_repaired': 0, 'shape_split': 0, 'shape_pruned': 0} [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Training Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Test Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Initialize Gaussians with init_points.npy [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Initialize gaussians from 400 estimated points [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+[ITER 6] Saving Gaussians [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Final Gaussian count: 1,600 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_training_v4\densify\training_summary.json [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Training Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Test Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading trained model at iteration 6 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+render render_train:   0%|          | 0/20 [00:00<?, ?it/s]
+                                                           
+render_train complete. psnr_2d: 25.688579559326172, ssim_2d: 0.9476693868637085. [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+render render_test:   0%|          | 0/8 [00:00<?, ?it/s]
+                                                         
+render_test complete. psnr_2d: 25.38694190979004, ssim_2d: 0.94637131690979. [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+reconstruction complete. psnr_3d: 18.120229721069336, ssim_3d: 0.9331125418345133 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+PASS_RUN densify {'adam_steps': 5, 'densify_calls': 2, 'sparse_queries': 0, 'shape_repaired': 0, 'shape_split': 0, 'shape_pruned': 0} [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Training Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Test Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Initialize Gaussians with init_points.npy [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Initialize gaussians from 400 estimated points [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+[ITER 1] Sparse slice axis=2 index=11 candidates=1353 samples=60 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+[ITER 2] Sparse slice axis=2 index=48 candidates=1353 samples=60 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+[ITER 3] Sparse slice axis=2 index=17 candidates=1353 samples=60 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+[ITER 4] Sparse slice axis=2 index=18 candidates=1353 samples=60 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+[ITER 5] Sparse slice axis=2 index=30 candidates=1353 samples=60 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+[ITER 6] Sparse slice axis=2 index=10 candidates=1353 samples=60 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+[ITER 6] Saving Gaussians [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Final Gaussian count: 400 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_training_v4\sparse\training_summary.json [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Training Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Test Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading trained model at iteration 6 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+render render_train:   0%|          | 0/20 [00:00<?, ?it/s]
+                                                           
+render_train complete. psnr_2d: 25.746623992919922, ssim_2d: 0.9481522440910339. [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+render render_test:   0%|          | 0/8 [00:00<?, ?it/s]
+                                                         
+render_test complete. psnr_2d: 25.44582176208496, ssim_2d: 0.946890652179718. [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+reconstruction complete. psnr_3d: 18.610090255737305, ssim_3d: 0.9346487323443095 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+PASS_RUN sparse {'adam_steps': 5, 'densify_calls': 0, 'sparse_queries': 6, 'shape_repaired': 0, 'shape_split': 0, 'shape_pruned': 0} [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Training Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Test Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Initialize Gaussians with init_points.npy [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Initialize gaussians from 400 estimated points [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+[ITER 6] Saving Gaussians [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Final Gaussian count: 400 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_training_v4\shape_repair\training_summary.json [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Training Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading Test Cameras [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+Loading trained model at iteration 6 [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15] [03/11 00:10:15]
+
+render render_train:   0%|          | 0/20 [00:00<?, ?it/s]
+                                                           
+render_train complete. psnr_2d: 25.810754776000977, ssim_2d: 0.9484154582023621. [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+render render_test:   0%|          | 0/8 [00:00<?, ?it/s]
+                                                         
+render_test complete. psnr_2d: 25.49664306640625, ssim_2d: 0.9471402764320374. [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+reconstruction complete. psnr_3d: 18.67396354675293, ssim_3d: 0.9347924788792928 [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+PASS_RUN shape_repair {'adam_steps': 5, 'densify_calls': 0, 'sparse_queries': 0, 'shape_repaired': 3, 'shape_split': 0, 'shape_pruned': 0} [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Training Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Test Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Initialize Gaussians with init_points.npy [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Initialize gaussians from 400 estimated points [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+[ITER 6] Saving Gaussians [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Final Gaussian count: 493 [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_training_v4\shape_split\training_summary.json [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Training Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Test Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading trained model at iteration 6 [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+render render_train:   0%|          | 0/20 [00:00<?, ?it/s]
+                                                           
+render_train complete. psnr_2d: 25.809467315673828, ssim_2d: 0.9484125971794128. [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+render render_test:   0%|          | 0/8 [00:00<?, ?it/s]
+                                                         
+render_test complete. psnr_2d: 25.49515724182129, ssim_2d: 0.9471362233161926. [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+reconstruction complete. psnr_3d: 18.6508731842041, ssim_3d: 0.9347782532374064 [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+PASS_RUN shape_split {'adam_steps': 5, 'densify_calls': 0, 'sparse_queries': 0, 'shape_repaired': 0, 'shape_split': 93, 'shape_pruned': 0} [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Training Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Test Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Initialize Gaussians with init_points.npy [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Initialize gaussians from 400 estimated points [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+[ITER 6] Saving Gaussians [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Final Gaussian count: 397 [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_training_v4\shape_prune\training_summary.json [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Training Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Test Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading trained model at iteration 6 [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+render render_train:   0%|          | 0/20 [00:00<?, ?it/s]
+                                                           
+render_train complete. psnr_2d: 25.81096839904785, ssim_2d: 0.9484160542488098. [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+render render_test:   0%|          | 0/8 [00:00<?, ?it/s]
+                                                         
+render_test complete. psnr_2d: 25.496736526489258, ssim_2d: 0.9471404552459717. [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+reconstruction complete. psnr_3d: 18.702245712280273, ssim_3d: 0.9348122477531433 [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+PASS_RUN shape_prune {'adam_steps': 5, 'densify_calls': 0, 'sparse_queries': 0, 'shape_repaired': 0, 'shape_split': 0, 'shape_pruned': 3} [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Training Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Test Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Initialize Gaussians with init_points.npy [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Initialize gaussians from 400 estimated points [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Train:   0%|          | 0/3 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/3 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/3 [00:00<?, ?it/s]
+                                            
+[ITER 3] Saving Gaussians [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+[ITER 3] Saving Checkpoint [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Final Gaussian count: 400 [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_training_v4\resume\training_summary.json [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Training Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Test Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Initialize Gaussians with init_points.npy [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Initialize gaussians from 400 estimated points [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Load checkpoint chkpnt3.pth. [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:  50%|����������     | 3/6 [00:00<00:00, 996.59it/s]
+                                                     
+[ITER 6] Saving Gaussians [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Final Gaussian count: 400 [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_training_v4\resume\training_summary.json [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/20 for train
+Reading camera 2/20 for train
+Reading camera 3/20 for train
+Reading camera 4/20 for train
+Reading camera 5/20 for train
+Reading camera 6/20 for train
+Reading camera 7/20 for train
+Reading camera 8/20 for train
+Reading camera 9/20 for train
+Reading camera 10/20 for train
+Reading camera 11/20 for train
+Reading camera 12/20 for train
+Reading camera 13/20 for train
+Reading camera 14/20 for train
+Reading camera 15/20 for train
+Reading camera 16/20 for train
+Reading camera 17/20 for train
+Reading camera 18/20 for train
+Reading camera 19/20 for train
+Reading camera 20/20 for train [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+Reading camera 1/8 for test
+Reading camera 2/8 for test
+Reading camera 3/8 for test
+Reading camera 4/8 for test
+Reading camera 5/8 for test
+Reading camera 6/8 for test
+Reading camera 7/8 for test
+Reading camera 8/8 for test [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Training Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading Test Cameras [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+Loading trained model at iteration 6 [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16] [03/11 00:10:16]
+
+render render_train:   0%|          | 0/20 [00:00<?, ?it/s]
+                                                           
+render_train complete. psnr_2d: 25.745107650756836, ssim_2d: 0.9480140805244446. [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17]
+
+render render_test:   0%|          | 0/8 [00:00<?, ?it/s]
+                                                         
+render_test complete. psnr_2d: 25.449161529541016, ssim_2d: 0.9467691779136658. [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17]
+reconstruction complete. psnr_3d: 18.40319061279297, ssim_3d: 0.9340421954790751 [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17]
+PASS_RUN resume {'adam_steps': 4, 'densify_calls': 0, 'sparse_queries': 0, 'shape_repaired': 0, 'shape_split': 0, 'shape_pruned': 0} [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17]
+{
+  "runs": [
+    {
+      "name": "parallel",
+      "counts": {
+        "adam_steps": 5,
+        "densify_calls": 0,
+        "sparse_queries": 0,
+        "shape_repaired": 0,
+        "shape_split": 0,
+        "shape_pruned": 0
+      },
+      "finite_volume": true,
+      "evaluation": true
+    },
+    {
+      "name": "tv",
+      "counts": {
+        "adam_steps": 5,
+        "densify_calls": 0,
+        "sparse_queries": 0,
+        "shape_repaired": 0,
+        "shape_split": 0,
+        "shape_pruned": 0
+      },
+      "finite_volume": true,
+      "evaluation": true
+    },
+    {
+      "name": "densify",
+      "counts": {
+        "adam_steps": 5,
+        "densify_calls": 2,
+        "sparse_queries": 0,
+        "shape_repaired": 0,
+        "shape_split": 0,
+        "shape_pruned": 0
+      },
+      "finite_volume": true,
+      "evaluation": true
+    },
+    {
+      "name": "sparse",
+      "counts": {
+        "adam_steps": 5,
+        "densify_calls": 0,
+        "sparse_queries": 6,
+        "shape_repaired": 0,
+        "shape_split": 0,
+        "shape_pruned": 0
+      },
+      "finite_volume": true,
+      "evaluation": true
+    },
+    {
+      "name": "shape_repair",
+      "counts": {
+        "adam_steps": 5,
+        "densify_calls": 0,
+        "sparse_queries": 0,
+        "shape_repaired": 3,
+        "shape_split": 0,
+        "shape_pruned": 0
+      },
+      "finite_volume": true,
+      "evaluation": true
+    },
+    {
+      "name": "shape_split",
+      "counts": {
+        "adam_steps": 5,
+        "densify_calls": 0,
+        "sparse_queries": 0,
+        "shape_repaired": 0,
+        "shape_split": 93,
+        "shape_pruned": 0
+      },
+      "finite_volume": true,
+      "evaluation": true
+    },
+    {
+      "name": "shape_prune",
+      "counts": {
+        "adam_steps": 5,
+        "densify_calls": 0,
+        "sparse_queries": 0,
+        "shape_repaired": 0,
+        "shape_split": 0,
+        "shape_pruned": 3
+      },
+      "finite_volume": true,
+      "evaluation": true
+    },
+    {
+      "name": "resume",
+      "counts": {
+        "adam_steps": 4,
+        "densify_calls": 0,
+        "sparse_queries": 0,
+        "shape_repaired": 0,
+        "shape_split": 0,
+        "shape_pruned": 0
+      },
+      "finite_volume": true,
+      "evaluation": true
+    }
+  ],
+  "pose_backend": {
+    "available": false,
+    "reason": "Pose calibration requires the target repository's self_xray_gaussian_rasterization_voxelization CUDA extension. Build/install that extension before enabling pose_enabled."
+  }
+} [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17] [03/11 00:10:17]

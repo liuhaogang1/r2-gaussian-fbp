@@ -86,6 +86,30 @@ PyTorch/CUDA 环境中运行 `scripts/build_pose_rasterizer.ps1`；默认流程�
 现有的 rasterizer，不受新扩展影响。位姿结果保存在模型目录的
 `pose_calibration/` 下，原始 `meta_data.json` 不会被覆盖。
 
+## 可选：抑制异常形状 Gaussian
+
+形状抑制默认关闭。关闭时不计算形状损失、不追踪异常状态，也不改变旧检查点的
+保存格式。开启后，训练只惩罚超过阈值的细长或扁平 Gaussian；可选的硬处理在多个
+检查周期持续异常后执行。建议先只启用软惩罚并检查训练指标，再尝试修复或删除；
+`split` 是实验性操作，可能增加点数并改变局部拟合。
+
+例如只抑制细长 Gaussian，并在训练过程中渐增正则权重：
+
+```bash
+python train.py -s /path/to/dataset -m /path/to/model \
+  --shape_enabled --shape_needle_enabled \
+  --shape_needle_threshold 10 --lambda_shape_needle 0.01 \
+  --shape_start_iter 500 --shape_end_iter 15000 --shape_ramp_iters 1000 \
+  --shape_hard_action none
+```
+
+通过 `run_pipeline.py` 启动时使用 `--train_shape_*` 参数，例如
+`--train_shape_enabled --train_lambda_shape_needle 0.01`。硬处理模式为
+`none`、`prune_low`、`repair`、`split` 或 `auto`：`auto` 会删除满足低密度或低积分代理
+阈值的持续异常点，并修复其余持续异常点；它不会自动拆分。`prune_low` 需要通过
+`shape_low_density_threshold` 或 `shape_low_mass_threshold` 设置至少一个正阈值，
+否则不会因低贡献条件删除 Gaussian。拆分模式受 `max_num_gaussians` 限制。
+
 如果没有中心 JSON，删除 `--center_json`，脚本会先调用 `scan_fbp_center_tomopy.py`，并把中心结果写到输出目录同级的 `<output_dir_name>_center.json`。这要求当前环境安装 TomoPy。
 
 流程会生成：
@@ -255,7 +279,8 @@ source.sVoxel_resolution 及 pipeline_manifest.json 的 resolved_arguments 中�
 
 初始化默认按照实际 `sVoxel` 和 `offOrigin` 映射体素中心，支持非立方体
 和非零原点；无 scanner 元数据的独立体仍按中心单位立方体处理。FBP 预览
-保留原输入长度单位；常规测试体仍按现有流程导出归一化单位，叠加前应换算。
+和常规测试体的 NIfTI 均使用原数据集长度单位；常规测试导出时恢复
+`scene_scale`，保留实际体素间距和偏移，便于与初始化及高分辨率输出叠加。
 
 已有物理 FBP 数据集可以继续使用，但需要在新模型目录重新训练。旧投影
 约定训练得到的 checkpoint/点云不能直接用于验证新几何。旧兼容数据集若记录
@@ -321,11 +346,28 @@ python export_highres.py \
 
 默认块大小为 `128 128 64`、NPY 输出类型为 float32；可通过 `--dtype float16` 减小 NPY 体积，但 NIfTI 仍为 float32，以便 Slicer 兼容。使用 `--output` 时，其他三个文件沿用指定文件的目录和主文件名。任一目标文件已存在时，脚本会在查询前停止，不覆盖已有结果。
 
-NIfTI 的轴顺序与原流程 `test.py` 保持一致：等价于 `sitk.GetImageFromArray(volume.transpose(2, 0, 1))`，因此 NIfTI I/J/K 对应 NPY 的 Y/X/Z，文件尺寸为 `(NY, NX, NZ)`。仅 NIfTI 写出时交换 X/Y，不对数据做 180° 旋转；分块查询、NPY 和中心切片 PNG 仍保持原来的 XYZ 约定。
+两个 CUDA 查询后端均使用 `8×8×8` 体素块。为使分块查询与整体验证使用相同的块边界，每个查询块边长按 8 的倍数向下取整，最小为 8，再限制到对应轴的分辨率；末尾允许不足整块。默认块大小不变，`8 9 10` 实际使用 `8 8 8`。JSON 的 `chunk_size_xyz` 保留请求值，`query_chunk_size_xyz` 记录实际值。
 
-本次轴顺序兼容不改变现有 spacing、原点或尺度：NIfTI 仍使用数据集 `meta_data.json` 的原始长度坐标，原点对应第一个 voxel 的中心，采用单位方向 LPS 并转换为 NIfTI 的 RAS sform。spacing 和原点按原有顺序设置，不随体素轴交换。JSON 原有的 `spacing_xyz/center_xyz/size_xyz` 仍是模型归一化坐标，`nifti_geometry` 记录 NIfTI 实际尺寸、轴映射及空间几何。原流程测试体采用归一化尺度且原点为零，故方向兼容不代表两份文件可以直接空间叠加。由于数据集未声明长度单位，NIfTI 不擅自标记为毫米；如果原始参数并非毫米，Slicer 中的测量数值需要结合实际单位解读。
+所有新导出的 FBP、初始化去噪、常规测试和高分辨率 NIfTI 统一采用 XYZ：I/J/K 对应 NPY 的 X/Y/Z，尺寸为 `(NX, NY, NZ)`，等价于 `sitk.GetImageFromArray(volume.transpose(2, 1, 0))`。内部数组、点云坐标和查询仍为 XYZ。切片预览统一为横纵轴递增的显示方向；初始化与去噪预览增加轴标签，显示调整不改变 NPY 数据。
 
-此修改只影响此后新导出的 NIfTI，不会自动改写之前生成的文件。
+NIfTI 使用数据集 `meta_data.json` 的原始长度坐标：`spacing = sVoxel / shape_xyz`，首体素中心 `origin = offOrigin - sVoxel/2 + spacing/2`，采用单位方向 LPS，并转换为 NIfTI 的 RAS sform。常规测试导出会恢复训练时的归一化尺度；高分辨率 JSON 顶层 `spacing_xyz/center_xyz/size_xyz` 仍为模型归一化坐标，`nifti_geometry` 记录原数据集空间几何及 `format_version: 2`。新文件描述中写入 `r2g axes=XYZ` 标记，供掩膜回导识别。数据集未声明长度单位，因此不会擅自标记为毫米；Slicer 中的测量数值应结合实际输入单位解读。
+
+此修改只影响此后新生成的输出，不会自动改写旧文件。已有 NPY 可继续作为 XYZ 数据使用；旧 NIfTI 的轴顺序、原点及尺度不会随代码更新，需重新导出后再与新文件比较。
+
+从 Slicer 回导掩膜时，`--reference` 应指向当时用于分割的原始完整 NIfTI；裁剪或重定向后的 labelmap 会按该参考的物理坐标重采样。新文件通常可自动识别，也可显式指定：
+
+```bash
+python apply_mask_to_volume.py \
+  --volume /path/to/dataset/vol_fbp.npy \
+  --mask /path/to/sample_labelmap.nii.gz \
+  --reference /path/to/dataset/vol_fbp_preview.nii.gz \
+  --mask_axes xyz \
+  --output /path/to/dataset/original_masked.npy
+```
+
+如果分割使用的是旧版 FBP 或测试导出的 YXZ NIfTI，请保留并传入那份旧参考，同时改用 `--mask_axes legacy_yxz`。旧版去噪输出的载荷已为 XYZ，应选择 `xyz`。无标记且形状不能区分 X/Y 的参考（例如立方体）必须显式选择，程序会拒绝含糊的自动推断；不要用新导出的参考替换当时分割使用的旧参考。
+
+掩膜输出 NPY 始终为 XYZ。程序默认读取 `--volume` 同目录的 `meta_data.json`，也可通过 `--metadata` 指定；有元数据时输出 NIfTI 使用上述数据集几何，无元数据时保留原参考的物理映射，仅重排载荷索引。后者无法补回旧文件缺失的数据集偏移或尺度。
 
 输出是对训练 Gaussian 场的直接密集采样，并非额外训练或超分辨率推断。NIfTI 强度值与 NPY 一致，不随空间坐标恢复而缩放。float32 的 1024³ NPY 约占 4 GiB，NIfTI 还需要额外磁盘空间和压缩时间；其压缩大小取决于数据。原有训练、测试和管线入口保持不变。
 

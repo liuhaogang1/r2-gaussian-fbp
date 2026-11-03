@@ -72,10 +72,17 @@ def validate_triplet(name, values, positive=True):
     return result
 
 
+def aligned_chunk_size(chunk_size, resolution):
+    # Both CUDA voxelizer backends use 8x8x8 tiles. Restarting their tile
+    # grids at arbitrary voxel offsets changes Gaussian tail culling.
+    return tuple(min(n, max(8, (c // 8) * 8)) for c, n in zip(chunk_size, resolution))
+
+
 def export_volume(gaussians, pipeline, center, full_size, resolution, chunk_size, output_path, dtype):
     """Query and write a globally aligned volume without holding it on GPU."""
     resolution = validate_triplet("resolution", resolution)
     chunk_size = validate_triplet("chunk_size", chunk_size)
+    chunk_size = aligned_chunk_size(chunk_size, resolution)
     full_size = np.asarray(full_size, dtype=np.float64)
     center = np.asarray(center, dtype=np.float64)
     spacing = full_size / np.asarray(resolution, dtype=np.float64)
@@ -195,9 +202,8 @@ def main():
     dataset_center = np.asarray(center, dtype=np.float64) / scene_scale
     dataset_size = np.asarray(full_size, dtype=np.float64) / scene_scale
     dataset_origin = dataset_center - dataset_size / 2 + dataset_spacing / 2
-    # Match test.py's NIfTI-only XY permutation. Query, NPY and center-slice
-    # PNG retain their original XYZ convention; spacing/origin are unchanged.
-    nifti_shape = np.asarray(resolution, dtype=np.int64)[[1, 0, 2]]
+    # All exports use the same XYZ indexing and original dataset geometry.
+    nifti_shape = np.asarray(resolution, dtype=np.int64)
     nifti_size = nifti_shape * dataset_spacing
     nifti_center = dataset_origin + (nifti_shape - 1) * dataset_spacing / 2
     volume = np.load(output_path, mmap_mode="r")
@@ -221,8 +227,9 @@ def main():
         "scene_scale": float(scene_scale),
         "nifti_geometry": {
             "shape_xyz": nifti_shape.tolist(),
-            "input_axes_for_nifti_ijk": ["Y", "X", "Z"],
-            "axis_convention": "legacy test.py: GetImageFromArray(volume.transpose(2, 0, 1))",
+            "input_axes_for_nifti_ijk": ["X", "Y", "Z"],
+            "axis_convention": "XYZ voxel centers; identity LPS direction",
+            "format_version": 2,
             "spacing_xyz": dataset_spacing.tolist(),
             "origin_xyz": dataset_origin.tolist(),
             "center_xyz": nifti_center.tolist(),
@@ -236,6 +243,7 @@ def main():
         "source_path": osp.abspath(dataset.source_path),
         "iteration": int(loaded_iter),
         "chunk_size_xyz": list(chunk_size),
+        "query_chunk_size_xyz": list(aligned_chunk_size(chunk_size, resolution)),
         "pose_enabled": bool(args.pose_enabled),
         "note": "Direct samples of the trained Gaussian field; not a new reconstruction or super-resolution inference.",
     }

@@ -1,10 +1,46 @@
 """CPU-only previews and streaming NIfTI output for XYZ Gaussian volumes."""
 
 import gzip
+import os
 import struct
+import tempfile
 from pathlib import Path
 
 import numpy as np
+
+NIFTI_XYZ_MARKER = "r2g axes=XYZ; LPS; dataset units"
+
+
+def volume_geometry(shape, scanner):
+    """Return XYZ spacing and first-voxel-center origin in dataset units."""
+    shape = np.asarray(shape, dtype=np.float64)
+    size = np.asarray(scanner.get("sVoxel"), dtype=np.float64)
+    center = np.asarray(scanner.get("offOrigin", [0, 0, 0]), dtype=np.float64)
+    if shape.shape != (3,) or not np.all(np.isfinite(shape)) or np.any(shape <= 0):
+        raise ValueError("volume shape must contain three positive finite counts")
+    if size.shape != (3,) or not np.all(np.isfinite(size)) or np.any(size <= 0):
+        raise ValueError("scanner.sVoxel must contain three positive finite XYZ lengths")
+    if center.shape != (3,) or not np.all(np.isfinite(center)):
+        raise ValueError("scanner.offOrigin must contain three finite XYZ coordinates")
+    spacing = size / shape
+    return spacing, center - size / 2 + spacing / 2
+
+
+def save_nifti_xyz(volume, scanner, output_path):
+    """Atomically replace an XYZ export using scanner voxel-center geometry."""
+    spacing, origin = volume_geometry(volume.shape, scanner)
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=output.parent, suffix=".nii.gz")
+    os.close(descriptor)
+    Path(temporary).unlink()
+    try:
+        save_nifti_streaming(volume, spacing, origin, temporary)
+        os.replace(temporary, output)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return {"axes": "XYZ", "spacing": spacing.tolist(), "origin_lps": origin.tolist(),
+            "length_units": "dataset units (no conversion)", "format_version": 2}
 
 
 def save_center_slices(volume, spacing, output_path):
@@ -54,13 +90,11 @@ def save_center_slices(volume, spacing, output_path):
 
 
 def save_nifti_streaming(volume, spacing, origin, output_path):
-    """Write float32 NIfTI with the original pipeline's XY display convention.
+    """Write float32 NIfTI with I/J/K equal to input X/Y/Z.
 
-    Equivalent to SimpleITK.GetImageFromArray(volume.transpose(2, 0, 1)),
-    followed by SetSpacing(spacing) and SetOrigin(origin). Thus NIfTI I/J/K
-    correspond to input Y/X/Z, and its size is (NY, NX, NZ). Deliberately keep
-    spacing/origin in the supplied order, as in the original pipeline; do not
-    apply an extra direction transform or swap the NPY/query coordinates.
+    Equivalent to SimpleITK.GetImageFromArray(volume.transpose(2, 1, 0)),
+    followed by SetSpacing(spacing) and SetOrigin(origin). The description
+    marks the axis convention so references can identify it during mask import.
 
     spacing/origin use the original dataset length units, with identity LPS
     direction, like SimpleITK. NIfTI sform stores the equivalent RAS transform.
@@ -75,7 +109,7 @@ def save_nifti_streaming(volume, spacing, origin, output_path):
         raise ValueError("spacing must contain three positive finite values")
     if origin.shape != (3,) or not np.all(np.isfinite(origin)):
         raise ValueError("origin must contain three finite values")
-    nifti_shape = (volume.shape[1], volume.shape[0], volume.shape[2])
+    nifti_shape = tuple(volume.shape)
 
     # NIfTI-1 single-file header plus its four-byte extension flag. Using a
     # streaming gzip writer avoids a full transposed array and a SimpleITK copy.
@@ -85,7 +119,7 @@ def save_nifti_streaming(volume, spacing, origin, output_path):
     struct.pack_into("<2h", header, 70, 16, 32)  # DT_FLOAT32, bitpix
     struct.pack_into("<8f", header, 76, 1.0, *spacing, 1.0, 1.0, 1.0, 1.0)
     struct.pack_into("<3f", header, 108, 352.0, 1.0, 0.0)  # offset, slope, intercept
-    description = b"Gaussian field; original dataset geometry; length units unspecified"
+    description = NIFTI_XYZ_MARKER.encode("ascii")
     header[148:148 + len(description)] = description
     struct.pack_into("<2h", header, 252, 0, 2)  # qform unknown, sform aligned
     struct.pack_into("<4f", header, 280, -spacing[0], 0.0, 0.0, -origin[0])
@@ -99,9 +133,8 @@ def save_nifti_streaming(volume, spacing, origin, output_path):
         with raw, gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=6, mtime=0) as stream:
             stream.write(header)
             for index in range(volume.shape[2]):
-                # File I is fastest: write [input X, input Y] without a
-                # transpose, matching each [J, I] plane of the legacy writer.
-                plane = np.asarray(volume[:, :, index], dtype="<f4", order="C")
+                # File I (input X) is fastest; each stored plane is [Y, X].
+                plane = np.asarray(volume[:, :, index].T, dtype="<f4", order="C")
                 stream.write(plane.tobytes(order="C"))
     except BaseException:
         raw.close()

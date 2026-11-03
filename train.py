@@ -30,8 +30,19 @@ from r2_gaussian.utils.log_utils import prepare_output_and_logger
 from r2_gaussian.dataset import Scene
 from r2_gaussian.utils.loss_utils import l1_loss, ssim, tv_3d_loss
 from r2_gaussian.utils.image_utils import metric_vol, metric_proj
-from r2_gaussian.utils.plot_utils import show_two_slice
-from r2_gaussian.pose import ParallelPose, ConePose
+from r2_gaussian.utils.plot_utils import show_two_slice as _show_two_slice
+
+
+def show_volume_slices(slice1, slice2, *args, **kwargs):
+    """Keep training previews in the same display coordinates as XYZ exports."""
+    first = slice1.detach().cpu().numpy() if torch.is_tensor(slice1) else np.asarray(slice1)
+    second = slice2.detach().cpu().numpy() if torch.is_tensor(slice2) else np.asarray(slice2)
+    return _show_two_slice(np.flipud(first.T), np.flipud(second.T), *args, **kwargs)
+from r2_gaussian.pose import (
+    PARALLEL_POSE_FORMAT_VERSION,
+    ParallelPose,
+    ConePose,
+)
 
 
 def _prepare_slice_supervision(opt, scanner_cfg, device):
@@ -136,8 +147,161 @@ def _sample_sparse_slice(supervision, iteration, opt, scanner_cfg):
     }
 
 
-def save_pose_result(scene, pose_model):
+def _shape_regularization(gaussians, opt, iteration):
+    """Return thresholded shape penalties and diagnostics.
+
+    The branch is deliberately opt-in.  Ratios below the configured limits
+    have exactly zero penalty, so this does not push ordinary Gaussians toward
+    spherical shapes.
+    """
+    if not getattr(opt, "shape_enabled", False):
+        return None, {}
+    zero = gaussians.get_xyz.new_zeros(())
+    start = int(getattr(opt, "shape_start_iter", 500))
+    end = int(getattr(opt, "shape_end_iter", 15000))
+    if iteration < start or iteration > end:
+        return zero, {}
+    scales = gaussians.get_scaling
+    ordered = torch.sort(scales, dim=1).values.clamp_min(1e-12)
+    needle_ratio = ordered[:, 2] / ordered[:, 1]
+    sheet_ratio = ordered[:, 1] / ordered[:, 0]
+    excess_needle = torch.relu(
+        torch.log(needle_ratio) - np.log(float(getattr(opt, "shape_needle_threshold", 10.0)))
+    )
+    excess_sheet = torch.relu(
+        torch.log(sheet_ratio) - np.log(float(getattr(opt, "shape_sheet_threshold", 10.0)))
+    )
+    ramp_iters = max(1, int(getattr(opt, "shape_ramp_iters", 1000)))
+    ramp = min(1.0, max(0.0, (iteration - start + 1) / ramp_iters))
+    needle_loss = excess_needle.square().mean() if getattr(opt, "shape_needle_enabled", True) else zero
+    sheet_loss = excess_sheet.square().mean() if getattr(opt, "shape_sheet_enabled", True) else zero
+    total = ramp * (
+        float(getattr(opt, "lambda_shape_needle", 0.0)) * needle_loss
+        + float(getattr(opt, "lambda_shape_sheet", 0.0)) * sheet_loss
+    )
+    return total, {
+        "shape_needle": needle_loss,
+        "shape_sheet": sheet_loss,
+        "shape_needle_count": int((needle_ratio > float(getattr(opt, "shape_needle_threshold", 10.0))).sum().item()),
+        "shape_sheet_count": int((sheet_ratio > float(getattr(opt, "shape_sheet_threshold", 10.0))).sum().item()),
+        "shape_needle_p99": float(torch.quantile(needle_ratio.detach(), 0.99).item()),
+        "shape_sheet_p99": float(torch.quantile(sheet_ratio.detach(), 0.99).item()),
+    }
+
+
+def _validate_shape_options(opt):
+    if not getattr(opt, "shape_enabled", False):
+        return
+    for name in ("shape_needle_threshold", "shape_sheet_threshold",
+                 "shape_hard_needle_ratio", "shape_hard_sheet_ratio"):
+        value = float(getattr(opt, name, 0.0))
+        if not np.isfinite(value) or value <= 1.0:
+            raise ValueError(f"{name} must be finite and greater than 1")
+    for name in ("lambda_shape_needle", "lambda_shape_sheet",
+                 "shape_low_density_threshold", "shape_low_mass_threshold"):
+        value = float(getattr(opt, name, 0.0))
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError(f"{name} must be finite and non-negative")
+    if not (getattr(opt, "shape_needle_enabled", False) or getattr(opt, "shape_sheet_enabled", False)):
+        raise ValueError("Enable at least one of shape_needle_enabled or shape_sheet_enabled")
+    if int(getattr(opt, "shape_end_iter", 0)) < int(getattr(opt, "shape_start_iter", 0)):
+        raise ValueError("shape_end_iter must be greater than or equal to shape_start_iter")
+    if int(getattr(opt, "shape_check_interval", 0)) < 1 or int(getattr(opt, "shape_patience", 0)) < 1:
+        raise ValueError("shape_check_interval and shape_patience must be positive")
+    if int(getattr(opt, "shape_ramp_iters", 0)) < 0:
+        raise ValueError("shape_ramp_iters must be non-negative")
+    if int(getattr(opt, "shape_split_count", 0)) < 2:
+        raise ValueError("shape_split_count must be at least 2")
+    density_gain = float(getattr(opt, "shape_repair_max_density_gain", 0.0))
+    if not np.isfinite(density_gain) or density_gain < 1.0:
+        raise ValueError("shape_repair_max_density_gain must be at least 1")
+    if int(getattr(opt, "shape_max_hard_actions_per_check", 0)) < 1:
+        raise ValueError("shape_max_hard_actions_per_check must be positive")
+    if str(getattr(opt, "shape_hard_action", "none")) not in {"none", "prune_low", "repair", "split", "auto"}:
+        raise ValueError("shape_hard_action must be none, prune_low, repair, split, or auto")
+
+
+def _shape_hard_process(gaussians, opt, iteration):
+    """Update persistence counters and optionally prune/repair/split anomalies."""
+    if not getattr(opt, "shape_enabled", False):
+        return {}
+    interval = max(1, int(getattr(opt, "shape_check_interval", 100)))
+    if iteration < int(getattr(opt, "shape_start_iter", 500)) or iteration % interval:
+        return {}
+    if iteration > int(getattr(opt, "shape_end_iter", 15000)):
+        return {}
+    if gaussians.shape_bad_count is None or gaussians.shape_bad_count.shape[0] != gaussians.get_xyz.shape[0]:
+        gaussians.enable_shape_tracking()
+    scales = gaussians.get_scaling.detach().clamp_min(1e-12)
+    ordered = torch.sort(scales, dim=1).values
+    needle = ordered[:, 2] / ordered[:, 1] > float(getattr(opt, "shape_hard_needle_ratio", 50.0))
+    sheet = ordered[:, 1] / ordered[:, 0] > float(getattr(opt, "shape_hard_sheet_ratio", 50.0))
+    severe = (needle & bool(getattr(opt, "shape_needle_enabled", True))) | (
+        sheet & bool(getattr(opt, "shape_sheet_enabled", True))
+    )
+    gaussians.shape_bad_count = torch.where(
+        severe, gaussians.shape_bad_count + 1, torch.zeros_like(gaussians.shape_bad_count)
+    )
+    persistent = gaussians.shape_bad_count >= max(1, int(getattr(opt, "shape_patience", 3)))
+    action = str(getattr(opt, "shape_hard_action", "none"))
+    if action == "none" or not persistent.any():
+        return {"shape_persistent": int(persistent.sum().item())}
+    candidates = torch.nonzero(persistent, as_tuple=False).flatten()
+    limit = max(1, int(getattr(opt, "shape_max_hard_actions_per_check", 32)))
+    if candidates.numel() > limit:
+        candidates = candidates[:limit]
+    candidate_mask = torch.zeros_like(persistent)
+    candidate_mask[candidates] = True
+    density = gaussians.get_density.detach().reshape(-1)
+    mass = density * torch.prod(scales, dim=1) * ((2.0 * np.pi) ** 1.5)
+    low = torch.zeros_like(candidate_mask)
+    density_limit = float(getattr(opt, "shape_low_density_threshold", 0.0))
+    mass_limit = float(getattr(opt, "shape_low_mass_threshold", 0.0))
+    if density_limit > 0:
+        low |= density < density_limit
+    if mass_limit > 0:
+        low |= mass < mass_limit
+    low &= candidate_mask
+    pruned = repaired = split = 0
+    if action in ("repair", "auto"):
+        target = candidate_mask & ~low
+        repaired = gaussians.shape_repair(
+            target,
+            float(getattr(opt, "shape_needle_threshold", 10.0)),
+            float(getattr(opt, "shape_sheet_threshold", 10.0)),
+            float(getattr(opt, "shape_repair_max_density_gain", 4.0)),
+            bool(getattr(opt, "shape_needle_enabled", True)),
+            bool(getattr(opt, "shape_sheet_enabled", True)),
+        )
+    if action in ("prune_low", "auto") and low.any():
+        if low.all():
+            # Keep the highest-mass point rather than deleting the model.
+            low[torch.argmax(mass)] = False
+        gaussians.prune_points(low)
+        pruned = int(low.sum().item())
+    elif action == "split":
+        children = int(getattr(opt, "shape_split_count", 2))
+        cap = int(getattr(opt, "max_num_gaussians", 0) or 0)
+        if cap > 0:
+            available = max(0, cap - gaussians.get_xyz.shape[0])
+            max_parents = available // max(1, children - 1)
+            split_candidates = torch.nonzero(candidate_mask, as_tuple=False).flatten()
+            if split_candidates.numel() > max_parents:
+                candidate_mask.zero_()
+                if max_parents:
+                    candidate_mask[split_candidates[:max_parents]] = True
+        split = gaussians.shape_split(candidate_mask, children)
+    return {
+        "shape_persistent": int(persistent.sum().item()),
+        "shape_pruned": pruned,
+        "shape_repaired": repaired,
+        "shape_split": split,
+    }
+
+
+def save_pose_result(scene, pose_model, iteration=None):
     """Save learned pose offsets without touching the input dataset."""
+    from r2_gaussian.utils.artifact_utils import atomic_npz
     output_dir = osp.join(scene.model_path, "pose_calibration")
     os.makedirs(output_dir, exist_ok=True)
     values = {
@@ -145,15 +309,32 @@ def save_pose_result(scene, pose_model):
         for key, value in pose_model.values().items()
         if value is not None
     }
-    np.savez(osp.join(output_dir, "pose_offsets.npz"), **values)
-
+    if iteration is not None:
+        from r2_gaussian.pose.artifacts import pose_metadata
+        from r2_gaussian.utils.artifact_utils import atomic_json
+        values.update(pose_metadata(scene, iteration))
+        snapshot = osp.join(output_dir, f"iteration_{iteration}")
+        os.makedirs(snapshot, exist_ok=True)
+        snapshot_values = dict(values)
+        if scene.scanner_cfg["mode"] == "parallel":
+            snapshot_values["pose_format_version"] = np.asarray(PARALLEL_POSE_FORMAT_VERSION, dtype=np.int32)
+        from r2_gaussian.utils.artifact_utils import atomic_npz
+        atomic_npz(osp.join(snapshot, "pose_offsets.npz"), **snapshot_values)
+        atomic_json(osp.join(output_dir, "pose_required.json"), {"latest_iteration": iteration})
     # Cone-beam uses the target repository's translation/quaternion names.
     if "delta_translation" in values or "delta_quaternion" in values:
-        np.savez(
+        atomic_npz(osp.join(output_dir, "pose_offsets.npz"), **values)
+        atomic_npz(
             osp.join(output_dir, "cone_pose_offsets.npz"),
             **values,
         )
         return
+
+    atomic_npz(
+        osp.join(output_dir, "pose_offsets.npz"),
+        pose_format_version=np.asarray(PARALLEL_POSE_FORMAT_VERSION, dtype=np.int32),
+        **values,
+    )
 
     delta_angle = values.get("delta_angle")
     view_shift = values.get("view_shift")
@@ -168,10 +349,21 @@ def save_pose_result(scene, pose_model):
         if view_shift is not None
         else np.zeros((len(scene.train_cameras), 2), dtype=np.float32)
     )
+    beam_values = values.get("beam_tilt", np.zeros(2, dtype=np.float32))
+    detector_roll = values.get("detector_roll", np.zeros(1, dtype=np.float32))
 
     with open(osp.join(output_dir, "pose_report.csv"), "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["view", "image", "angle_delta_rad", "shift_u_px", "shift_v_px"])
+        writer.writerow([
+            "view",
+            "image",
+            "angle_delta_rad",
+            "shift_u_px",
+            "shift_v_px",
+            "beam_tilt_u_rad",
+            "beam_tilt_v_rad",
+            "detector_roll_rad",
+        ])
         for index, camera in enumerate(scene.train_cameras):
             writer.writerow([
                 index,
@@ -179,6 +371,9 @@ def save_pose_result(scene, pose_model):
                 float(angle_values[index]),
                 float(global_shift[0] + view_values[index, 0]),
                 float(global_shift[1] + view_values[index, 1]),
+                float(beam_values[0]),
+                float(beam_values[1]),
+                float(detector_roll[0]),
             ])
 
 
@@ -266,6 +461,11 @@ def training(
                 camera.attach_parallel_pose(pose_model, pose_index)
             else:
                 camera.attach_cone_pose(pose_model, pose_index)
+        if scanner_mode == "parallel":
+            # Held-out views receive only parameters shared across views;
+            # per-view angle and detector shifts are learned for train views.
+            for camera in scene.test_cameras:
+                camera.attach_parallel_pose(pose_model, None)
 
     # Set up some parameters
     scanner_cfg = scene.scanner_cfg
@@ -293,10 +493,52 @@ def training(
     initialize_gaussian(gaussians, dataset, None)
     scene.gaussians = gaussians
     gaussians.training_setup(opt)
+    pose_checkpoint_state = None
+    pose_optimizer_checkpoint_state = None
     if checkpoint is not None:
-        (model_params, first_iter) = torch.load(checkpoint)
+        checkpoint_data = torch.load(checkpoint)
+        if len(checkpoint_data) == 2:
+            model_params, first_iter = checkpoint_data
+        elif len(checkpoint_data) == 5:
+            (
+                model_params,
+                first_iter,
+                pose_checkpoint_state,
+                pose_optimizer_checkpoint_state,
+                checkpoint_binding,
+            ) = checkpoint_data
+            from r2_gaussian.pose.artifacts import validate_checkpoint_binding
+            validate_checkpoint_binding(checkpoint_binding, scene, first_iter)
+        elif len(checkpoint_data) == 4:
+            raise ValueError("Unbound legacy pose checkpoint: start fresh or export a bound checkpoint")
+        else:
+            raise ValueError(
+                "Unsupported checkpoint format: expected a Gaussian checkpoint "
+                "with 2 entries or a bound pose checkpoint with 5 entries."
+            )
+        if pose_checkpoint_state is not None and pose_model is None:
+            raise ValueError("Pose-aware checkpoint requires pose_enabled; refusing to discard learned geometry")
         gaussians.restore(model_params, opt)
+        if pose_model is not None:
+            if pose_checkpoint_state is None:
+                raise ValueError(
+                    "Cannot resume pose-enabled training from a Gaussian-only "
+                    "checkpoint; its learned camera geometry was not saved. "
+                    "Start a fresh training run or use a pose-aware checkpoint."
+                )
+            pose_model.load_state_dict(pose_checkpoint_state)
+            if pose_optimizer is not None:
+                if pose_optimizer_checkpoint_state is None:
+                    raise ValueError(
+                        "Pose-aware checkpoint is missing pose optimizer state; "
+                        "resume would reset the geometry optimizer."
+                    )
+                pose_optimizer.load_state_dict(pose_optimizer_checkpoint_state)
         print(f"Load checkpoint {osp.basename(checkpoint)}.")
+
+    _validate_shape_options(opt)
+    if getattr(opt, "shape_enabled", False) and gaussians.shape_bad_count is None:
+        gaussians.enable_shape_tracking()
 
     slice_supervision = _prepare_slice_supervision(
         opt, scanner_cfg, gaussians.get_xyz.device
@@ -321,6 +563,8 @@ def training(
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):
         iter_start.record()
+        shape_diag = {}
+        shape_action_diag = {}
 
         # Update learning rate
         gaussians.update_learning_rate(iteration)
@@ -365,6 +609,17 @@ def training(
             loss_tv = tv_3d_loss(vol_pred, reduction="mean")
             loss["tv"] = loss_tv
             loss["total"] = loss["total"] + opt.lambda_tv * loss_tv
+
+        # Optional anomalous-shape suppression.  This branch is completely
+        # inactive by default, preserving the historical loss path.
+        if getattr(opt, "shape_enabled", False):
+            shape_loss, shape_diag = _shape_regularization(gaussians, opt, iteration)
+        else:
+            shape_loss, shape_diag = None, {}
+        if shape_diag:
+            loss["shape_needle"] = shape_diag["shape_needle"]
+            loss["shape_sheet"] = shape_diag["shape_sheet"]
+            loss["total"] = loss["total"] + shape_loss
 
         # Optional sparse initialization-volume slice supervision. Only the
         # sampled reference positions are queried, so no dense slice volume is
@@ -451,16 +706,37 @@ def training(
                     pose_optimizer.step()
                     pose_optimizer.zero_grad(set_to_none=True)
 
+            # Hard actions are checked only at the configured cadence and
+            # after the optimizer step, so no live autograd graph references
+            # parameters that are being pruned/replaced.
+            if getattr(opt, "shape_enabled", False):
+                shape_action_diag = _shape_hard_process(gaussians, opt, iteration)
+                if gaussians.get_xyz.shape[0] == 0 or any(
+                    not torch.isfinite(value).all() for value in
+                    (gaussians._xyz, gaussians._scaling, gaussians._rotation, gaussians._density)
+                ):
+                    raise ValueError("Shape processing produced an empty or nonfinite model")
+
             # Save gaussians
             if iteration in saving_iterations or iteration == opt.iterations:
                 tqdm.write(f"[ITER {iteration}] Saving Gaussians")
                 scene.save(iteration, queryfunc)
+                if pose_model is not None:
+                    save_pose_result(scene, pose_model, iteration)
 
             # Save checkpoints
             if iteration in checkpoint_iterations:
                 tqdm.write(f"[ITER {iteration}] Saving Checkpoint")
+                checkpoint_data = (gaussians.capture(), iteration)
+                if pose_model is not None:
+                    from r2_gaussian.pose.artifacts import pose_metadata
+                    checkpoint_data += (
+                        pose_model.state_dict(),
+                        pose_optimizer.state_dict() if pose_optimizer is not None else None,
+                        pose_metadata(scene, iteration),
+                    )
                 torch.save(
-                    (gaussians.capture(), iteration),
+                    checkpoint_data,
                     ckpt_save_path + "/chkpnt" + str(iteration) + ".pth",
                 )
 
@@ -480,6 +756,11 @@ def training(
             metrics = {}
             for l in loss:
                 metrics["loss_" + l] = loss[l].item()
+            for key, value in shape_diag.items():
+                if key.endswith("_count") or key.endswith("_p99"):
+                    metrics[key] = float(value)
+            for key, value in shape_action_diag.items():
+                metrics[key] = float(value)
             for param_group in gaussians.optimizer.param_groups:
                 metrics[f"lr_{param_group['name']}"] = param_group["lr"]
             training_report(
@@ -494,7 +775,7 @@ def training(
             )
 
     if pose_model is not None:
-        save_pose_result(scene, pose_model)
+        save_pose_result(scene, pose_model, opt.iterations)
 
     final_num_gaussians = int(gaussians.get_xyz.shape[0])
     summary_path = osp.join(scene.model_path, "training_summary.json")
@@ -561,7 +842,7 @@ def training_report(
                     if tb_writer and idx in show_idx:
                         image_show_2d.append(
                             torch.from_numpy(
-                                show_two_slice(
+                                _show_two_slice(
                                     gt_image[0],
                                     image[0],
                                     f"{viewpoint.image_name} gt",
@@ -623,7 +904,7 @@ def training_report(
         if tb_writer:
             image_show_3d = np.concatenate(
                 [
-                    show_two_slice(
+                    show_volume_slices(
                         vol_gt[..., i],
                         vol_pred[..., i],
                         f"slice {i} gt",

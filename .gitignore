@@ -14,3 +14,15 @@ volume_raw
 FIPS_raw
 FIPS_processed
 other_scripts
+
+# Local analysis and test artifacts (keep these directories on disk)
+/analysis/
+/.flow_test_outputs/
+/.pytest_cache/
+/.ruff_cache/
+/fbp_preview_local_20261028/
+
+# Images and NumPy arrays at any depth, including uppercase extensions
+*.[jJ][pP][gG]
+*.[pP][nN][gG]
+*.[nN][pP][yY]

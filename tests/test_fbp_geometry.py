@@ -230,7 +230,7 @@ class PhysicalProjectionTests(unittest.TestCase):
         geo = prepare.build_geometry(args, [204, 336])
         np.testing.assert_allclose(geo.sDetector, [0.00816, 0.01344])
         np.testing.assert_allclose(geo.dDetector, [0.00004, 0.00004])
-        np.testing.assert_allclose(geo.offDetector, [-0.00037, 0.00008])
+        np.testing.assert_allclose(geo.offDetector, [-0.00008, -0.00037])
 
 
 if __name__ == "__main__":

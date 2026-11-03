@@ -70,6 +70,28 @@ class OptimizationParams(ParamGroup):
         self.max_scale = None  # percent of volume size
         self.max_num_gaussians = 500_000
 
+        # Optional anomalous Gaussian-shape suppression. Disabled by default.
+        self.shape_enabled = False
+        self.shape_needle_enabled = False
+        self.shape_sheet_enabled = False
+        self.shape_needle_threshold = 10.0
+        self.shape_sheet_threshold = 10.0
+        self.lambda_shape_needle = 0.0
+        self.lambda_shape_sheet = 0.0
+        self.shape_start_iter = 500
+        self.shape_end_iter = 15000
+        self.shape_ramp_iters = 1000
+        self.shape_check_interval = 100
+        self.shape_patience = 3
+        self.shape_hard_needle_ratio = 50.0
+        self.shape_hard_sheet_ratio = 50.0
+        self.shape_hard_action = "none"
+        self.shape_low_density_threshold = 0.0
+        self.shape_low_mass_threshold = 0.0
+        self.shape_repair_max_density_gain = 4.0
+        self.shape_split_count = 2
+        self.shape_max_hard_actions_per_check = 32
+
         # Optional sparse initialization-volume slice supervision.
         self.slice_loss_enabled = False
         self.slice_reference_path = ""

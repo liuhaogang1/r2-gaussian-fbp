@@ -24,7 +24,7 @@ def parse_svoxel(value):
 
 
 def detector_shape_after_preprocessing(raw_shape, pixel_subsample):
-    """Mirror fbp_preprocess's resize and legacy symmetric square crop."""
+    """Mirror the centered fixed-pitch square resampling."""
     if len(raw_shape) != 2 or any(int(n) <= 0 for n in raw_shape):
         raise ValueError(f"Expected a positive 2D projection shape, got {raw_shape}")
     if int(pixel_subsample) != pixel_subsample or pixel_subsample < 1:
@@ -32,10 +32,7 @@ def detector_shape_after_preprocessing(raw_shape, pixel_subsample):
     height, width = (int(n) for n in raw_shape)
     if pixel_subsample != 1:
         height, width = max(1, height // pixel_subsample), max(1, width // pixel_subsample)
-        if height > width:
-            height -= 2 * ((height - width) // 2)
-        elif width > height:
-            width -= 2 * ((width - height) // 2)
+        height = width = min(height, width)
     return [height, width]
 
 
@@ -84,7 +81,13 @@ def resolve_pipeline(args, stage_in_window):
         paths = select_tiff_paths(args.input_dir, pattern)
         if not paths:
             raise ValueError(f"sVoxel auto: no projection TIFFs found in {args.input_dir}")
-        values, info = auto_svoxel_from_projection(paths[0], args.fbp_pixel_size, args.fbp_pixel_subsample)
+        axis_pitch = args.fbp_pixel_size
+        if args.fbp_mode == "cone":
+            if getattr(args, "fbp_pixel_size_kind", None) not in {"axis", "detector"}:
+                raise ValueError("Cone geometry requires explicit --fbp_pixel_size_kind axis or detector")
+            if args.fbp_pixel_size_kind == "detector":
+                axis_pitch *= args.fbp_DSO / args.fbp_DSD
+        values, info = auto_svoxel_from_projection(paths[0], axis_pitch, args.fbp_pixel_subsample)
     args.fbp_sVoxel = values
     args.fbp_sVoxel_resolution = info
     print(f"Resolved fbp_sVoxel auto: {values} ({info['method']})", flush=True)

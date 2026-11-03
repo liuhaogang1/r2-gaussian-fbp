@@ -1,0 +1,36 @@
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\scripts\prepare_sio2_experiments.py --input_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\intensity_raw --pixel_subsample 1 --pixel_size .05 --projection_scale 1 --nVoxel 33 35 37 --sVoxel 2 2 2 --offDetector .1 0 --DSO 5 --DSD 8 --n_test 6 --train_views 12 --sparse_views 6 --dark_value 10 --output_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\experiment --preprocess_only
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\scripts\prepare_sio2_experiments.py --input_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\intensity_raw --pixel_subsample 1 --pixel_size .05 --projection_scale 1 --nVoxel 33 35 37 --sVoxel 2 2 2 --offDetector .1 0 --DSO 5 --DSD 8 --n_test 6 --train_views 12 --sparse_views 6 --dark_value 10 --output_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\experiment
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\prepare_fbp_tiff.py --input_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\intensity_raw --output_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\preprocessed --projection_glob Tomo_*.tiff --flat_glob Flat_*.tiff --flat_field --dark_value 10 --input_type transmission --i0_mode fixed --i0 1 --clip_percentile 100 --shift_v 0 --pixel_subsample 1 --projection_scale 1 --preprocess_only
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\init_from_fbp.py --dataset D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset --use_train_fbp --fbp_output D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\train_cache --n_points 200 --density_thresh .03 --output D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\train_points.npy --visualize_fbp_nii
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\init_from_fbp.py --dataset D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset --use_train_fbp --fbp_output D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\train_cache --n_points 200 --density_thresh .03 --output D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\train_points.npy --visualize_fbp_nii
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\init_from_fbp.py --volume D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\experiment\vol_full_fbp.npy --output D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\custom_points --n_points 100 --density_thresh .03 --visualize --visualize_slices
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\scripts\local_fbp_preview.py D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset\vol_fbp.npy D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\local_preview --min_component 2
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\scripts\validate_raw_orientation.py --raw D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\volume.raw --raw_shape 13 13 13 --reference D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\reference.npy --output D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\oriented.npy --score_shape 13 13 13
+Looking for config file in D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\skip_model\cfg_args
+Config file found: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_auxiliary_final\skip_model\cfg_args
+
+Reading camera 1/12 for train
+Reading camera 2/12 for train
+Reading camera 3/12 for train
+Reading camera 4/12 for train
+Reading camera 5/12 for train
+Reading camera 6/12 for train
+Reading camera 7/12 for train
+Reading camera 8/12 for train
+Reading camera 9/12 for train
+Reading camera 10/12 for train
+Reading camera 11/12 for train
+Reading camera 12/12 for train [03/11 00:46:14]
+
+Reading camera 1/6 for test
+Reading camera 2/6 for test
+Reading camera 3/6 for test
+Reading camera 4/6 for test
+Reading camera 5/6 for test
+Reading camera 6/6 for test [03/11 00:46:14]
+Loading Training Cameras [03/11 00:46:14]
+Loading Test Cameras [03/11 00:46:14]
+Loading trained model at iteration 6 [03/11 00:46:15]
+�ҵ� 19 ��ͶӰ TIFF��
+�����ɸ߶Աȶȳ�ʼ����Ƭ: Tomo_0.png
+PASS auxiliary integrations {"experiment_full_sparse_and_intensity": true, "shared_flat_preprocess_and_duplicate_endpoint": true, "train_fbp_cache_and_custom_init": true, "local_preview_cli": true, "raw_96_orientation_candidates": {"raw": "D:\\TEM\\r2-gaussian-fbp\\analysis\\integration_20261103_auxiliary_final\\volume.raw", "raw_shape": [13, 13, 13], "raw_dtype": "uint8", "reference": "D:\\TEM\\r2-gaussian-fbp\\analysis\\integration_20261103_auxiliary_final\\reference.npy", "target_shape": [13, 13, 13], "score_shape": [13, 13, 13], "perm": [2, 0, 1], "flip_axes": [false, true, false], "invert": false, "score": 1.0}, "legacy_converter_isolated_one_image": true, "experiment_dispatch_both_choices_mocked": true, "evaluation_all_skip_status": true}

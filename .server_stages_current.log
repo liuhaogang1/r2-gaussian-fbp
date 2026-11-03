@@ -1,0 +1,399 @@
+
+[START] init | 2026-11-03T15:20:19.081446+08:00
++ 'D:\CondaData\envs\r2_gaussian\python.exe' -u 'D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\local_pipeline_launcher.py' --pipeline_config 'D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\pipeline.json' --train_config 'D:\TEM\r2-gaussian-fbp\configs\pose_parallel.yaml' --stop_after init
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\scripts\scan_fbp_center_tomopy.py --input_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel_raw --projection_glob view_*.tiff --flat_glob Flat_*.tiff --dark_value 0 --flat_eps 1e-06 --config D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\scan.txt --angle_start 0.0 --angle_interval 0.5 --input_type line_integral --i0 1.0 --i0_mode percentile --i0_percentile 99.5 --i0_hi_percentile 99.9 --zero_policy nearest --log_eps 1e-06 --clip_percentile 100 --shift_v 0 --pixel_subsample 1 --resize_order 1 --projection_scale 1 --pixel_size 0.05 --method pair --tol 0.25 --algorithm scipy --search_min_px -100.0 --search_max_px 100.0 --slice_step 4 --slice_margin 3 --max_slices 9 --pair_min_offset_px -5 --pair_max_offset_px 5 --pair_coarse_step_px 1.0 --pair_fine_step_px 0.1 --pair_min_score 0.1 --pair_min_peak_prominence 1e-05 --pair_max_center_spread_px 5.0 --axis_slope_threshold 0.01 --threads 8 --free_ray 0 128 0 128 --output D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\center.json
+Read 19 views from D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel_raw
+Processed projections: (19, 65, 65)
+Using detector rows: [3, 11, 19, 23, 31, 39, 43, 51, 59]
+Endpoint-pair center: 30.000000 pixels
+Endpoint-pair correlation: 1.000000
+Endpoint-pair peak prominence: 0.126482
+Endpoint-pair per-row center spread: 0.000000 pixels
+Absolute detector offset: +2.000000 pixels
+Set scanner.offDetector[0] to approximately 0.099999992
+Saved center JSON: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\center.json
+Saved center scan: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\center_scan.csv
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\prepare_fbp_tiff.py --input_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel_raw --output_dir D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset --projection_glob view_*.tiff --flat_glob Flat_*.tiff --dark_value 0 --flat_eps 1e-06 --config D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\scan.txt --angle_start 0.0 --angle_interval 0.5 --mode parallel --input_type line_integral --i0 1.0 --i0_mode percentile --i0_percentile 99.5 --i0_hi_percentile 99.9 --zero_policy nearest --log_eps 1e-06 --clip_percentile 100 --shift_v 0 --pixel_subsample 1 --recon_pixel_subsample 1 --resize_order 1 --projection_scale 1 --n_train 12 --n_test 6 --sparse_views 6 --sparse_fbp_output vol_sparse_fbp.npy --nVoxel 33 35 37 --sVoxel 2 2 2 --offOrigin 0 0 0 --DSD 7 --DSO 5 --pixel_size 0.05 --accuracy 0.5 --filter hann --seed 0 --free_ray 0 128 0 128 --center_json D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\center.json
+Using offDetector from D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\center.json: 0.099999992 0
+Saved sparse FBP volume: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset\vol_sparse_fbp.npy
+Saved FBP volume: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset\vol_fbp.npy
+Saved FBP previews: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset\vol_fbp_preview_z.png and D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset\vol_fbp_preview.nii.gz (window 5.10037e-11 ~ 0.550609)
+Saved 18 full views, 12 training views, and 6 test views
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\init_from_fbp.py --dataset D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset --use_train_fbp --output D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\init_points.npy --denoise --denoise_sigma 0.8 --denoise_output_dir D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise --denoise_save_nii --n_points 200 --density_thresh 0.03 --density_rescale 0.2 --normalize_percentile 99.5 --seed 0 --visualize_max_points 50000 --visualize --visualize_slices --visualize_fbp_nii
+Reconstruct train-view FBP volume from: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset
+Saved train-view FBP cache to D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset\vol_train_fbp.npy
+Saved train-view FBP NIfTI to D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset\vol_train_fbp.nii.gz
+Saved 200 points to D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\init_points.npy
+density range: 0.00600606 ~ 0.2
+Denoise sigma=0.8 voxel, 0.001s; normalization=0.446974; candidates=8,039
+Saved denoised initialization report: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\denoise_report.json
+Saved initialization visualization to D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\init_points_preview.png
+Saved initialization slices to D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\init_points_slices.png
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\pipeline_manifest.json
+[PASSED] init (8.6s) | D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\logs\init.log
+
+[START] fbp_artifacts | 2026-11-03T15:20:27.646045+08:00
+{
+  "part": "fbp",
+  "scanner": {
+    "mode": "parallel",
+    "DSD": 7.0,
+    "DSO": 5.0,
+    "nDetector": [
+      65,
+      65
+    ],
+    "sDetector": [
+      3.25,
+      3.25
+    ],
+    "nVoxel": [
+      33,
+      35,
+      37
+    ],
+    "sVoxel": [
+      2.0,
+      2.0,
+      2.0
+    ],
+    "offOrigin": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "offDetector": [
+      0.09999999192557532,
+      0.0
+    ],
+    "accuracy": 0.5,
+    "totalAngle": 180.0,
+    "startAngle": 0.0,
+    "noise": false,
+    "filter": "hann"
+  },
+  "center": {
+    "offDetector": [
+      0.09999999192557532,
+      0.0
+    ],
+    "center_px": 30.000000161488494,
+    "center_reference_px": 32.0,
+    "offset_px": 1.9999998385115063,
+    "detector_pixel_u": 0.05,
+    "center_p10": 30.0,
+    "center_p90": 30.0,
+    "center_spread_px": 0.0,
+    "pair_score": 0.9999999999999951,
+    "pair_peak_prominence": 0.12648221352811762,
+    "pair_min_score": 0.1,
+    "pair_min_peak_prominence": 1e-05,
+    "pair_max_center_spread_px": 5.0,
+    "center_on_search_boundary": false,
+    "center_valid": true,
+    "n_tiff": 19,
+    "processed_shape": [
+      19,
+      65,
+      65
+    ],
+    "input_dir": "D:\\TEM\\r2-gaussian-fbp\\analysis\\integration_20261103_pipeline_final\\parallel_raw",
+    "processed_npy": null,
+    "endpoint_pair_npy": null,
+    "projection_glob": "view_*.tiff",
+    "flat_glob": "Flat_*.tiff",
+    "flat_field": false,
+    "dark_value": 0.0,
+    "flat_eps": 1e-06,
+    "input_type": "line_integral",
+    "i0_mode": "percentile",
+    "i0": 1.0,
+    "free_ray": [
+      0,
+      128,
+      0,
+      128
+    ],
+    "shift_v": 0,
+    "pixel_subsample": 1,
+    "projection_scale": 1.0,
+    "pixel_size": 0.05,
+    "method": "endpoint_pair",
+    "per_slice_csv": "D:\\TEM\\r2-gaussian-fbp\\analysis\\server_launcher_stages_20261103_v2\\real\\center.csv",
+    "scan_csv": "D:\\TEM\\r2-gaussian-fbp\\analysis\\server_launcher_stages_20261103_v2\\real\\center_scan.csv"
+  },
+  "n_train": 12,
+  "n_test": 6
+}
+[PASSED] fbp_artifacts (0.2s) | D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\logs\fbp_artifacts.log
+
+[START] init_artifacts | 2026-11-03T15:20:27.821276+08:00
+{
+  "part": "init",
+  "scanner": {
+    "mode": "parallel",
+    "DSD": 7.0,
+    "DSO": 5.0,
+    "nDetector": [
+      65,
+      65
+    ],
+    "sDetector": [
+      3.25,
+      3.25
+    ],
+    "nVoxel": [
+      33,
+      35,
+      37
+    ],
+    "sVoxel": [
+      2.0,
+      2.0,
+      2.0
+    ],
+    "offOrigin": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "offDetector": [
+      0.09999999192557532,
+      0.0
+    ],
+    "accuracy": 0.5,
+    "totalAngle": 180.0,
+    "startAngle": 0.0,
+    "noise": false,
+    "filter": "hann"
+  },
+  "points": 200,
+  "candidate_count": 8039,
+  "xyz_roundtrip": true
+}
+[PASSED] init_artifacts (0.3s) | D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\logs\init_artifacts.log
+
+[START] train | 2026-11-03T15:20:28.079700+08:00
++ 'D:\CondaData\envs\r2_gaussian\python.exe' -u 'D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\local_pipeline_launcher.py' --pipeline_config 'D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\pipeline.json' --train_config 'D:\TEM\r2-gaussian-fbp\configs\pose_parallel.yaml' --stop_after train --resume
+[center] resume: previous success retained
+[fbp] resume: previous success retained
+[init] resume: previous success retained
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\train.py -s D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset -m D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model --ply_path D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\init_points.npy --config D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\.pipeline_train_config.yml --data_device cuda --scale_min 0.0005 --scale_max 0.5 --iterations 6 --position_lr_init 0.0002 --position_lr_final 2e-05 --position_lr_max_steps 30000 --density_lr_init 0.01 --density_lr_final 0.001 --density_lr_max_steps 30000 --scaling_lr_init 0.005 --scaling_lr_final 0.0005 --scaling_lr_max_steps 30000 --rotation_lr_init 0.001 --rotation_lr_final 0.0001 --rotation_lr_max_steps 30000 --lambda_dssim 0.25 --lambda_tv 0.01 --tv_vol_size 16 --density_min_threshold 1e-05 --densification_interval 2 --densify_from_iter 2 --densify_until_iter 5 --densify_grad_threshold 5e-05 --densify_scale_threshold 0.1 --max_num_gaussians 300000 --slice_axis z --slice_start_iter 500 --slice_end_iter 15000 --slice_interval 50 --slice_filter_threshold 0.01 --slice_filter_ratio 10.0 --slice_max_points 200000 --slice_query_chunk_size 1024 --lambda_slice 0.05 --slice_seed 0 --pose_mode parallel --parallel_angle_max_deg 0.5 --parallel_detector_shift_max_pixel 3.0 --parallel_beam_tilt_max_deg 0.5 --parallel_detector_roll_max_deg 0.5 --pose_lr 0.0001 --pose_lambda_smooth 0.1 --pose_lambda_magnitude 0.0 --shape_needle_threshold 10.0 --shape_sheet_threshold 10.0 --lambda_shape_needle 0.001 --lambda_shape_sheet 0.001 --shape_start_iter 1 --shape_end_iter 6 --shape_ramp_iters 1 --shape_check_interval 1 --shape_patience 2 --shape_hard_needle_ratio 50.0 --shape_hard_sheet_ratio 50.0 --shape_hard_action repair --shape_low_density_threshold 0.0 --shape_low_mass_threshold 0.0 --shape_repair_max_density_gain 4.0 --shape_split_count 2 --shape_max_hard_actions_per_check 32 --shape_enabled --shape_needle_enabled --shape_sheet_enabled --parallel_optimize_angle --parallel_optimize_global_detector_shift --parallel_optimize_per_view_detector_shift --parallel_optimize_beam_tilt --parallel_optimize_detector_roll --cone_optimize_translation --cone_optimize_quaternion --test_iterations 3 6 --save_iterations 3 6 --checkpoint_iterations 3 6
+Loading configuration file from D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\.pipeline_train_config.yml [03/11 15:20:33]
+Output folder: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model [03/11 15:20:33]
+Optimizing D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model [03/11 15:20:33]
+
+Reading camera 1/12 for train
+Reading camera 2/12 for train
+Reading camera 3/12 for train
+Reading camera 4/12 for train
+Reading camera 5/12 for train
+Reading camera 6/12 for train
+Reading camera 7/12 for train
+Reading camera 8/12 for train
+Reading camera 9/12 for train
+Reading camera 10/12 for train
+Reading camera 11/12 for train
+Reading camera 12/12 for train [03/11 15:20:33]
+
+Reading camera 1/6 for test
+Reading camera 2/6 for test
+Reading camera 3/6 for test
+Reading camera 4/6 for test
+Reading camera 5/6 for test
+Reading camera 6/6 for test [03/11 15:20:33]
+Loading Training Cameras [03/11 15:20:33]
+Loading Test Cameras [03/11 15:20:34]
+Initialize Gaussians with init_points.npy [03/11 15:20:34]
+Initialize gaussians from 200 estimated points [03/11 15:20:34]
+Use total variation loss [03/11 15:20:34]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:03<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:03<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:03<?, ?it/s]
+                                            
+[ITER 3] Saving Gaussians [03/11 15:20:34]
+[ITER 3] Saving Checkpoint [03/11 15:20:34]
+[ITER 3] Evaluating: psnr3d 21.594, ssim3d 0.401, psnr2d 22.548, ssim2d 0.589 [03/11 15:20:37]
+[ITER 6] Saving Gaussians [03/11 15:20:37]
+[ITER 6] Saving Checkpoint [03/11 15:20:37]
+[ITER 6] Evaluating: psnr3d 23.095, ssim3d 0.603, psnr2d 24.398, ssim2d 0.759 [03/11 15:20:40]
+Final Gaussian count: 356 [03/11 15:20:40]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\training_summary.json [03/11 15:20:40]
+Training complete. [03/11 15:20:40]
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\pipeline_manifest.json
+[PASSED] train (13.3s) | D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\logs\train.log
+
+[START] train_artifacts | 2026-11-03T15:20:41.354989+08:00
+{
+  "part": "train",
+  "scanner": {
+    "mode": "parallel",
+    "DSD": 7.0,
+    "DSO": 5.0,
+    "nDetector": [
+      65,
+      65
+    ],
+    "sDetector": [
+      3.25,
+      3.25
+    ],
+    "nVoxel": [
+      33,
+      35,
+      37
+    ],
+    "sVoxel": [
+      2.0,
+      2.0,
+      2.0
+    ],
+    "offOrigin": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "offDetector": [
+      0.09999999192557532,
+      0.0
+    ],
+    "accuracy": 0.5,
+    "totalAngle": 180.0,
+    "startAngle": 0.0,
+    "noise": false,
+    "filter": "hann"
+  }
+}
+[PASSED] train_artifacts (0.0s) | D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\logs\train_artifacts.log
+
+[START] test | 2026-11-03T15:20:41.359635+08:00
++ 'D:\CondaData\envs\r2_gaussian\python.exe' -u 'D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\local_pipeline_launcher.py' --pipeline_config 'D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\pipeline.json' --train_config 'D:\TEM\r2-gaussian-fbp\configs\pose_parallel.yaml' --stop_after test --resume
+[center] resume: previous success retained
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[train] resume: previous success retained
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\test.py -s D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\dataset -m D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model --iteration 6 --data_device cuda --scale_min 0.0005 --scale_max 0.5
+Looking for config file in D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\cfg_args
+Config file found: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\cfg_args
+
+Reading camera 1/12 for train
+Reading camera 2/12 for train
+Reading camera 3/12 for train
+Reading camera 4/12 for train
+Reading camera 5/12 for train
+Reading camera 6/12 for train
+Reading camera 7/12 for train
+Reading camera 8/12 for train
+Reading camera 9/12 for train
+Reading camera 10/12 for train
+Reading camera 11/12 for train
+Reading camera 12/12 for train [03/11 15:20:45]
+
+Reading camera 1/6 for test
+Reading camera 2/6 for test
+Reading camera 3/6 for test
+Reading camera 4/6 for test
+Reading camera 5/6 for test
+Reading camera 6/6 for test [03/11 15:20:45]
+Loading Training Cameras [03/11 15:20:45]
+Loading Test Cameras [03/11 15:20:45]
+Loading trained model at iteration 6 [03/11 15:20:45]
+
+render render_train:   0%|          | 0/12 [00:00<?, ?it/s]
+render render_train:   8%|▊         | 1/12 [00:00<00:02,  4.77it/s]
+                                                                   
+render_train complete. psnr_2d: 24.60401725769043, ssim_2d: 0.7609562277793884. [03/11 15:20:45]
+
+render render_test:   0%|          | 0/6 [00:00<?, ?it/s]
+                                                         
+render_test complete. psnr_2d: 24.397920608520508, ssim_2d: 0.7592682838439941. [03/11 15:20:45]
+reconstruction complete. psnr_3d: 23.094810485839844, ssim_3d: 0.6033815145492554 [03/11 15:20:46]
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\pipeline_manifest.json
+[PASSED] test (6.4s) | D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\logs\test.log
+
+[START] test_artifacts | 2026-11-03T15:20:47.736623+08:00
+{
+  "part": "test",
+  "scanner": {
+    "mode": "parallel",
+    "DSD": 7.0,
+    "DSO": 5.0,
+    "nDetector": [
+      65,
+      65
+    ],
+    "sDetector": [
+      3.25,
+      3.25
+    ],
+    "nVoxel": [
+      33,
+      35,
+      37
+    ],
+    "sVoxel": [
+      2.0,
+      2.0,
+      2.0
+    ],
+    "offOrigin": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "offDetector": [
+      0.09999999192557532,
+      0.0
+    ],
+    "accuracy": 0.5,
+    "totalAngle": 180.0,
+    "startAngle": 0.0,
+    "noise": false,
+    "filter": "hann"
+  },
+  "evaluation": {
+    "iteration": 6,
+    "n_train": 12,
+    "n_test": 6,
+    "render_train": true,
+    "render_test": true,
+    "reconstruction": true,
+    "status": "completed"
+  }
+}
+[PASSED] test_artifacts (0.0s) | D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\logs\test_artifacts.log
+
+[START] resume_1 | 2026-11-03T15:20:47.742960+08:00
++ 'D:\CondaData\envs\r2_gaussian\python.exe' -u 'D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\local_pipeline_launcher.py' --pipeline_config 'D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\pipeline.json' --train_config 'D:\TEM\r2-gaussian-fbp\configs\pose_parallel.yaml' --resume
+[center] resume: previous success retained
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[train] resume: previous success retained
+[test] resume: previous success retained
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\pipeline_manifest.json
+[PASSED] resume_1 (1.1s) | D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\logs\resume_1.log
+
+[START] resume_2 | 2026-11-03T15:20:48.879152+08:00
++ 'D:\CondaData\envs\r2_gaussian\python.exe' -u 'D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\local_pipeline_launcher.py' --pipeline_config 'D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\pipeline.json' --train_config 'D:\TEM\r2-gaussian-fbp\configs\pose_parallel.yaml' --resume
+[center] resume: previous success retained
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[train] resume: previous success retained
+[test] resume: previous success retained
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\real\model\init_denoise\pipeline_manifest.json
+[PASSED] resume_2 (1.1s) | D:\TEM\r2-gaussian-fbp\analysis\server_launcher_stages_20261103_v2\logs\resume_2.log
+PASS staged FBP/init/train/test with server settings, artifact checks and repeated resume

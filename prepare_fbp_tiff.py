@@ -25,11 +25,12 @@ from scripts.fbp_preprocess import (
 
 
 def save_fbp_preview(
-    output, volume, s_voxel, preview_percentiles=(1.0, 99.5), prefix="vol_fbp"
+    output, volume, s_voxel, preview_percentiles=(1.0, 99.5), prefix="vol_fbp",
+    off_origin=(0, 0, 0),
 ):
     """Save immediately viewable orthogonal slices and a correctly scaled NIfTI."""
-    import SimpleITK as sitk
     from PIL import Image
+    from r2_gaussian.utils.volume_export_utils import save_nifti_xyz
 
     volume = np.asarray(volume, dtype=np.float32)
     positive = volume[np.isfinite(volume) & (volume > 0)]
@@ -49,25 +50,22 @@ def save_fbp_preview(
         "z": display[:, :, center[2]],
     }
     for axis, plane in planes.items():
-        Image.fromarray(np.round(plane * 255.0).astype(np.uint8)).save(
+        # Match imshow(plane.T, origin="lower") in all other volume previews.
+        Image.fromarray(np.round(np.flipud(plane.T) * 255.0).astype(np.uint8)).save(
             output / f"{prefix}_preview_{axis}.png"
         )
 
     # Keep the full dynamic range for Slicer; PNGs are only for quick viewing.
-    preview_image = sitk.GetImageFromArray(volume.transpose(2, 0, 1))
-    spacing = tuple(float(size) / float(count) for size, count in zip(s_voxel, volume.shape))
-    preview_image.SetSpacing(spacing)
-    sitk.WriteImage(preview_image, str(output / f"{prefix}_preview.nii.gz"))
+    save_nifti_xyz(volume, {"sVoxel": s_voxel, "offOrigin": off_origin},
+                   output / f"{prefix}_preview.nii.gz")
     return float(low), float(high)
 
 
 def build_geometry(args, detector_shape):
     """Build the TIGRE geometry for parallel FBP or cone FDK.
 
-    ``args.pixel_size`` is always the *reconstruction-plane* pixel pitch in the
-    same length unit as ``DSD``/``DSO``/``sVoxel``.  For a cone-beam scan this
-    is the pixel size at the rotation axis, i.e. the detector pixel pitch
-    divided by the geometric magnification ``DSD / DSO``.
+    Pixel pitch uses the same length unit as DSD/DSO/sVoxel. Cone scans
+    explicitly choose axis pitch (magnified here) or physical detector pitch.
     """
     height, width = detector_shape
     effective_pixel_size = args.pixel_size * args.pixel_subsample
@@ -78,6 +76,11 @@ def build_geometry(args, detector_shape):
     geo.DSD = float(args.DSD)
     geo.DSO = float(args.DSO)
     geo.nDetector = np.asarray([height, width], dtype=np.int32)
+    if mode == "cone":
+        if getattr(args, "pixel_size_kind", None) not in {"axis", "detector"}:
+            raise ValueError("Cone geometry requires explicit --pixel_size_kind axis or detector")
+        if args.pixel_size_kind == "axis":
+            effective_pixel_size *= args.DSD / args.DSO
     geo.sDetector = np.asarray(
         [height * effective_pixel_size, width * effective_pixel_size],
         dtype=np.float32,
@@ -87,12 +90,8 @@ def build_geometry(args, detector_shape):
     geo.sVoxel = np.asarray(args.sVoxel[::-1], dtype=np.float32)
     geo.dVoxel = geo.sVoxel / geo.nVoxel
     geo.offOrigin = np.asarray(args.offOrigin[::-1], dtype=np.float32)
-    # The project-wide convention is [u, v]: u is the projection-column
-    # direction (the rotation-center direction), and v is the projection-row
-    # direction.  Keep this order when passing the offset to TIGRE.  The
-    # center scanners write [u, v] and the camera-pose code consumes [u, v] as
-    # well; swapping here would make FBP use a different physical offset.
-    geo.offDetector = np.asarray(args.offDetector, dtype=np.float32)
+    from r2_gaussian.utils.geometry_utils import tigre_detector_offset
+    geo.offDetector = tigre_detector_offset(args.offDetector)
     geo.accuracy = float(args.accuracy)
     geo.filter = args.filter
     return geo
@@ -185,6 +184,8 @@ def main(args):
         raise ValueError("--recon_pixel_subsample must be at least 1")
     if args.mode == "cone" and float(args.DSD) <= float(args.DSO):
         raise ValueError("--mode cone requires DSD > DSO")
+    if args.mode == "cone" and getattr(args, "pixel_size_kind", None) is None:
+        raise ValueError("Cone geometry requires explicit --pixel_size_kind axis or detector")
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
         raise FileExistsError(
             f"FBP output directory is not fresh: {args.output_dir}. "
@@ -200,7 +201,10 @@ def main(args):
         )
     if args.sVoxel == "auto":
         from scripts.auto_svoxel import auto_svoxel_from_projection
-        args.sVoxel, svoxel_resolution = auto_svoxel_from_projection(paths[0], args.pixel_size, args.pixel_subsample)
+        axis_pitch = args.pixel_size
+        if args.mode == "cone" and args.pixel_size_kind == "detector":
+            axis_pitch *= args.DSO / args.DSD
+        args.sVoxel, svoxel_resolution = auto_svoxel_from_projection(paths[0], axis_pitch, args.pixel_subsample)
         print(f"sVoxel auto: {svoxel_resolution['processed_shape']} -> {args.sVoxel}", flush=True)
     flat_paths = []
     flat_field = None
@@ -337,6 +341,7 @@ def main(args):
         output,
         volume,
         args.sVoxel,
+        off_origin=args.offOrigin,
     )
 
     sparse_indices = None
@@ -379,12 +384,15 @@ def main(args):
             else output / f"vol_sparse{args.sparse_views}_fbp.npy"
         )
         sparse_output = Path(sparse_output)
+        from r2_gaussian.utils.artifact_utils import npy_path
+        sparse_output = npy_path(sparse_output)
         if not sparse_output.is_absolute():
             sparse_output = output / sparse_output
         sparse_output.parent.mkdir(parents=True, exist_ok=True)
         np.save(sparse_output, sparse_volume)
         save_fbp_preview(
-            output, sparse_volume, args.sVoxel, prefix=sparse_output.stem
+            output, sparse_volume, args.sVoxel, prefix=sparse_output.stem,
+            off_origin=args.offOrigin,
         )
         print(f"Saved sparse FBP volume: {sparse_output}")
 
@@ -408,10 +416,7 @@ def main(args):
         "DSD": float(args.DSD),
         "DSO": float(args.DSO),
         "nDetector": [int(x) for x in projections.shape[1:]],
-        "sDetector": [
-            float(projections.shape[1] * args.pixel_size * args.pixel_subsample),
-            float(projections.shape[2] * args.pixel_size * args.pixel_subsample),
-        ],
+        "sDetector": build_geometry(args, projections.shape[1:]).sDetector.tolist(),
         "nVoxel": [int(x) for x in args.nVoxel],
         "sVoxel": [float(x) for x in args.sVoxel],
         "offOrigin": [float(x) for x in args.offOrigin],
@@ -442,6 +447,8 @@ def main(args):
             "mode": args.mode,
             "n_views": len(angles),
             "angles_all": [float(angle) for angle in angles],
+            "projection_files": [path.name for path in paths[:len(angles)]],
+            "geometry_version": 2,
             "removed_duplicate_endpoint": bool(removed_endpoint),
             "input_type": args.input_type,
             "i0": float(args.i0),
@@ -456,6 +463,8 @@ def main(args):
                 None if recon_subsample == args.pixel_subsample else int(recon_subsample)
             ),
             "input_pixel_size": float(args.pixel_size),
+            "pixel_size_kind": getattr(args, "pixel_size_kind", None),
+            "detector_pixel_size": float(scanner["sDetector"][1] / scanner["nDetector"][1]),
             "effective_pixel_size": float(args.pixel_size * args.pixel_subsample),
             "recon_pixel_size": float(args.pixel_size * recon_subsample),
             "projection_scale": float(args.projection_scale),
@@ -618,6 +627,8 @@ def build_parser():
     parser.add_argument("--DSD", type=float, default=7.0)
     parser.add_argument("--DSO", type=float, default=5.0)
     parser.add_argument("--pixel_size", type=float, default=1.0)
+    parser.add_argument("--pixel_size_kind", choices=["axis", "detector"], default=None,
+                        help="Required for cone: axis pitch or physical detector pitch. Parallel is unchanged.")
     parser.add_argument("--accuracy", type=float, default=0.5)
     parser.add_argument(
         "--filter",

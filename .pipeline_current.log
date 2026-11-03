@@ -1,0 +1,226 @@
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\scripts\scan_fbp_center_tomopy.py --input_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel_raw --dark_value 0.0 --flat_eps 1e-06 --angle_start 0.0 --angle_interval 10 --input_type line_integral --i0 1.0 --i0_mode percentile --i0_percentile 99.5 --i0_hi_percentile 99.9 --zero_policy nearest --log_eps 1e-06 --clip_percentile 100 --shift_v 0 --pixel_subsample 1 --resize_order 1 --projection_scale 1 --pixel_size 0.05 --method pair --tol 0.25 --algorithm scipy --search_min_px -100.0 --search_max_px 100.0 --slice_step 4 --slice_margin 3 --max_slices 9 --pair_min_offset_px -5 --pair_max_offset_px 5 --pair_coarse_step_px 1.0 --pair_fine_step_px 0.1 --pair_min_score 0.1 --pair_min_peak_prominence 1e-05 --pair_max_center_spread_px 5.0 --axis_slope_threshold 0.01 --threads 8 --free_ray 0 128 0 128 --output D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset_center.json
+Read 19 views from D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel_raw
+Processed projections: (19, 65, 65)
+Using detector rows: [3, 11, 19, 23, 31, 39, 43, 51, 59]
+Endpoint-pair center: 30.000000 pixels
+Endpoint-pair correlation: 1.000000
+Endpoint-pair peak prominence: 0.126482
+Endpoint-pair per-row center spread: 0.000000 pixels
+Absolute detector offset: +2.000000 pixels
+Set scanner.offDetector[0] to approximately 0.099999992
+Saved center JSON: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset_center.json
+Saved center scan: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset_center_scan.csv
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\prepare_fbp_tiff.py --input_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel_raw --output_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset --dark_value 0.0 --flat_eps 1e-06 --angle_start 0.0 --angle_interval 10 --mode parallel --input_type line_integral --i0 1.0 --i0_mode percentile --i0_percentile 99.5 --i0_hi_percentile 99.9 --zero_policy nearest --log_eps 1e-06 --clip_percentile 100 --shift_v 0 --pixel_subsample 1 --recon_pixel_subsample 2 --resize_order 1 --projection_scale 1 --n_train 12 --n_test 6 --sparse_views 6 --sparse_fbp_output sparse_volume --nVoxel 33 35 37 --sVoxel 2 2 2 --offOrigin 0.0 0.0 0.0 --DSD 8 --DSO 5 --pixel_size 0.05 --accuracy 0.5 --filter hann --seed 0 --free_ray 0 128 0 128 --center_json D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset_center.json
+Using offDetector from D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset_center.json: 0.099999992 0
+Reconstruction detector 2x subsampled: (32, 32)
+Reconstruction detector 2x subsampled: (32, 32)
+Saved sparse FBP volume: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset\sparse_volume.npy
+Saved FBP volume: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset\vol_fbp.npy
+Saved FBP previews: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset\vol_fbp_preview_z.png and D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset\vol_fbp_preview.nii.gz (window 2.32478e-10 ~ 0.457299)
+Saved 18 full views, 12 training views, and 6 test views
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\init_from_fbp.py --volume D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset\vol_fbp.npy --output D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_points.npy --denoise --denoise_sigma 0.8 --denoise_output_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_denoise --denoise_save_nii --n_points 200 --density_thresh 0.03 --density_rescale 0.15 --normalize_percentile 99.5 --seed 0 --visualize_max_points 50000 --visualize_slices
+Saved 200 points to D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_points.npy
+density range: 0.00453717 ~ 0.15
+Denoise sigma=0.8 voxel, 0.001s; normalization=0.381068; candidates=5,450
+Saved denoised initialization report: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_denoise\denoise_report.json
+Saved initialization slices to D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_points_slices.png
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\train.py -s D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset -m D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model --ply_path D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_points.npy --config D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_denoise\.pipeline_train_config.yml --data_device cuda --scale_min 0.0005 --scale_max 0.5 --iterations 6 --position_lr_init 0.0002 --position_lr_final 2e-05 --position_lr_max_steps 30000 --density_lr_init 0.01 --density_lr_final 0.001 --density_lr_max_steps 30000 --scaling_lr_init 0.005 --scaling_lr_final 0.0005 --scaling_lr_max_steps 30000 --rotation_lr_init 0.001 --rotation_lr_final 0.0001 --rotation_lr_max_steps 30000 --lambda_dssim 0.25 --lambda_tv 0 --tv_vol_size 32 --density_min_threshold 1e-05 --densification_interval 100 --densify_from_iter 500 --densify_until_iter 0 --densify_grad_threshold 5e-05 --densify_scale_threshold 0.1 --max_num_gaussians 500000 --slice_axis z --slice_start_iter 500 --slice_end_iter 15000 --slice_interval 50 --slice_filter_threshold 0.01 --slice_filter_ratio 10.0 --slice_max_points 200000 --slice_query_chunk_size 1024 --lambda_slice 0.05 --slice_seed 0 --pose_mode auto --parallel_angle_max_deg 0.5 --parallel_detector_shift_max_pixel 3.0 --parallel_beam_tilt_max_deg 0.5 --parallel_detector_roll_max_deg 0.5 --pose_lr 0.0001 --pose_lambda_smooth 0.1 --pose_lambda_magnitude 0.0 --shape_needle_threshold 10.0 --shape_sheet_threshold 10.0 --lambda_shape_needle 0.0 --lambda_shape_sheet 0.0 --shape_start_iter 500 --shape_end_iter 15000 --shape_ramp_iters 1000 --shape_check_interval 100 --shape_patience 3 --shape_hard_needle_ratio 50.0 --shape_hard_sheet_ratio 50.0 --shape_hard_action none --shape_low_density_threshold 0.0 --shape_low_mass_threshold 0.0 --shape_repair_max_density_gain 4.0 --shape_split_count 2 --shape_max_hard_actions_per_check 32 --cone_optimize_translation --cone_optimize_quaternion --test_iterations 6 --checkpoint_iterations 3 6
+Loading configuration file from D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_denoise\.pipeline_train_config.yml [03/11 00:45:11]
+Output folder: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model [03/11 00:45:11]
+Optimizing D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model [03/11 00:45:11]
+
+Reading camera 1/12 for train
+Reading camera 2/12 for train
+Reading camera 3/12 for train
+Reading camera 4/12 for train
+Reading camera 5/12 for train
+Reading camera 6/12 for train
+Reading camera 7/12 for train
+Reading camera 8/12 for train
+Reading camera 9/12 for train
+Reading camera 10/12 for train
+Reading camera 11/12 for train
+Reading camera 12/12 for train [03/11 00:45:11]
+
+Reading camera 1/6 for test
+Reading camera 2/6 for test
+Reading camera 3/6 for test
+Reading camera 4/6 for test
+Reading camera 5/6 for test
+Reading camera 6/6 for test [03/11 00:45:11]
+Loading Training Cameras [03/11 00:45:11]
+Loading Test Cameras [03/11 00:45:11]
+Initialize Gaussians with init_points.npy [03/11 00:45:11]
+Initialize gaussians from 200 estimated points [03/11 00:45:11]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+[ITER 3] Saving Checkpoint [03/11 00:45:11]
+[ITER 6] Saving Gaussians [03/11 00:45:11]
+[ITER 6] Saving Checkpoint [03/11 00:45:11]
+[ITER 6] Evaluating: psnr3d 26.284, ssim3d 0.774, psnr2d 23.203, ssim2d 0.829 [03/11 00:45:14]
+Final Gaussian count: 200 [03/11 00:45:14]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\training_summary.json [03/11 00:45:14]
+Training complete. [03/11 00:45:14]
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\test.py -s D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\dataset -m D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model --iteration 6 --data_device cuda --scale_min 0.0005 --scale_max 0.5
+Looking for config file in D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\cfg_args
+Config file found: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\cfg_args
+
+Reading camera 1/12 for train
+Reading camera 2/12 for train
+Reading camera 3/12 for train
+Reading camera 4/12 for train
+Reading camera 5/12 for train
+Reading camera 6/12 for train
+Reading camera 7/12 for train
+Reading camera 8/12 for train
+Reading camera 9/12 for train
+Reading camera 10/12 for train
+Reading camera 11/12 for train
+Reading camera 12/12 for train [03/11 00:45:17]
+
+Reading camera 1/6 for test
+Reading camera 2/6 for test
+Reading camera 3/6 for test
+Reading camera 4/6 for test
+Reading camera 5/6 for test
+Reading camera 6/6 for test [03/11 00:45:17]
+Loading Training Cameras [03/11 00:45:18]
+Loading Test Cameras [03/11 00:45:18]
+Loading trained model at iteration 6 [03/11 00:45:18]
+
+render render_train:   0%|          | 0/12 [00:00<?, ?it/s]
+render render_train:   8%|��         | 1/12 [00:00<00:02,  5.04it/s]
+                                                                   
+render_train complete. psnr_2d: 23.167112350463867, ssim_2d: 0.829215943813324. [03/11 00:45:18]
+
+render render_test:   0%|          | 0/6 [00:00<?, ?it/s]
+                                                         
+render_test complete. psnr_2d: 23.20288848876953, ssim_2d: 0.8293967247009277. [03/11 00:45:18]
+reconstruction complete. psnr_3d: 26.283782958984375, ssim_3d: 0.7738964160283407 [03/11 00:45:18]
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_denoise\pipeline_manifest.json
+[center] resume: previous success retained
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[train] resume: previous success retained
+[test] resume: previous success retained
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_denoise\pipeline_manifest.json
+[center] resume: previous success retained
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[train] resume: previous success retained
+[test] resume: previous success retained
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_denoise\pipeline_manifest.json
+[center] resume: previous success retained
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[center] resume: previous success retained
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[train] resume: previous success retained
+[test] resume: previous success retained
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\parallel\model\init_denoise\pipeline_manifest.json
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\prepare_fbp_tiff.py --input_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone_raw --output_dir D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset --dark_value 0.0 --flat_eps 1e-06 --angle_start 0.0 --angle_interval 15 --mode cone --input_type line_integral --i0 1.0 --i0_mode percentile --i0_percentile 99.5 --i0_hi_percentile 99.9 --zero_policy nearest --log_eps 1e-06 --clip_percentile 100 --shift_v 0 --pixel_subsample 1 --resize_order 1 --projection_scale 1 --n_train 12 --n_test 0 --nVoxel 33 35 37 --sVoxel 2 2 2 --offOrigin 0.0 0.0 0.0 --DSD 8 --DSO 5 --pixel_size 0.05 --accuracy 0.5 --filter hann --pixel_size_kind detector --seed 0 --free_ray 0 128 0 128 --offDetector 0.1 -0.05
+Saved FBP volume: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\vol_fbp.npy
+Saved FBP previews: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\vol_fbp_preview_z.png and D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\vol_fbp_preview.nii.gz (window 2.12319e-07 ~ 0.555645)
+Saved 24 full views, 12 training views, and 0 test views
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\init_from_fbp.py --volume D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\vol_fbp.npy --output D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model\init_points.npy --n_points 200 --density_thresh 0.03 --density_rescale 0.15 --normalize_percentile 99.5 --seed 0 --visualize_max_points 50000 --visualize_slices
+Saved 200 points to D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model\init_points.npy
+Saved canonical initialization to D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\init_dataset.npy
+density range: 0.00451807 ~ 0.15
+Saved initialization slices to D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model\init_points_slices.png
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\train.py -s D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset -m D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model --ply_path D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model\init_points.npy --config D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\.pipeline_train_config.yml --data_device cuda --scale_min 0.0005 --scale_max 0.5 --iterations 6 --position_lr_init 0.0002 --position_lr_final 2e-05 --position_lr_max_steps 30000 --density_lr_init 0.01 --density_lr_final 0.001 --density_lr_max_steps 30000 --scaling_lr_init 0.005 --scaling_lr_final 0.0005 --scaling_lr_max_steps 30000 --rotation_lr_init 0.001 --rotation_lr_final 0.0001 --rotation_lr_max_steps 30000 --lambda_dssim 0.25 --lambda_tv 0 --tv_vol_size 32 --density_min_threshold 1e-05 --densification_interval 100 --densify_from_iter 500 --densify_until_iter 0 --densify_grad_threshold 5e-05 --densify_scale_threshold 0.1 --max_num_gaussians 500000 --slice_axis z --slice_start_iter 500 --slice_end_iter 15000 --slice_interval 50 --slice_filter_threshold 0.01 --slice_filter_ratio 10.0 --slice_max_points 200000 --slice_query_chunk_size 1024 --lambda_slice 0.05 --slice_seed 0 --pose_mode auto --parallel_angle_max_deg 0.5 --parallel_detector_shift_max_pixel 3.0 --parallel_beam_tilt_max_deg 0.5 --parallel_detector_roll_max_deg 0.5 --pose_lr 0.0001 --pose_lambda_smooth 0.1 --pose_lambda_magnitude 0.0 --shape_needle_threshold 10.0 --shape_sheet_threshold 10.0 --lambda_shape_needle 0.0 --lambda_shape_sheet 0.0 --shape_start_iter 500 --shape_end_iter 15000 --shape_ramp_iters 1000 --shape_check_interval 100 --shape_patience 3 --shape_hard_needle_ratio 50.0 --shape_hard_sheet_ratio 50.0 --shape_hard_action none --shape_low_density_threshold 0.0 --shape_low_mass_threshold 0.0 --shape_repair_max_density_gain 4.0 --shape_split_count 2 --shape_max_hard_actions_per_check 32 --cone_optimize_translation --cone_optimize_quaternion --test_iterations 6 --checkpoint_iterations 3 6
+Loading configuration file from D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\.pipeline_train_config.yml [03/11 00:45:28]
+Output folder: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model [03/11 00:45:28]
+Optimizing D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model [03/11 00:45:28]
+
+Reading camera 1/12 for train
+Reading camera 2/12 for train
+Reading camera 3/12 for train
+Reading camera 4/12 for train
+Reading camera 5/12 for train
+Reading camera 6/12 for train
+Reading camera 7/12 for train
+Reading camera 8/12 for train
+Reading camera 9/12 for train
+Reading camera 10/12 for train
+Reading camera 11/12 for train
+Reading camera 12/12 for train [03/11 00:45:28]
+ [03/11 00:45:28]
+Loading Training Cameras [03/11 00:45:28]
+Loading Test Cameras [03/11 00:45:28]
+Initialize Gaussians with init_points.npy [03/11 00:45:28]
+Initialize gaussians from 200 estimated points [03/11 00:45:28]
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+
+Train:   0%|          | 0/6 [00:00<?, ?it/s]
+                                            
+[ITER 3] Saving Checkpoint [03/11 00:45:29]
+[ITER 6] Saving Gaussians [03/11 00:45:29]
+[ITER 6] Saving Checkpoint [03/11 00:45:29]
+[ITER 6] Evaluating: psnr3d 28.335, ssim3d 0.700, psnr2d 22.375, ssim2d 0.404 [03/11 00:45:31]
+Final Gaussian count: 200 [03/11 00:45:31]
+Training summary saved to: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model\training_summary.json [03/11 00:45:31]
+Training complete. [03/11 00:45:31]
++ D:\CondaData\envs\r2_gaussian\python.exe D:\TEM\r2-gaussian-fbp\test.py -s D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset -m D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model --iteration 6 --data_device cuda --scale_min 0.0005 --scale_max 0.5
+Looking for config file in D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model\cfg_args
+Config file found: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\model\cfg_args
+
+Reading camera 1/12 for train
+Reading camera 2/12 for train
+Reading camera 3/12 for train
+Reading camera 4/12 for train
+Reading camera 5/12 for train
+Reading camera 6/12 for train
+Reading camera 7/12 for train
+Reading camera 8/12 for train
+Reading camera 9/12 for train
+Reading camera 10/12 for train
+Reading camera 11/12 for train
+Reading camera 12/12 for train [03/11 00:45:34]
+ [03/11 00:45:34]
+Loading Training Cameras [03/11 00:45:35]
+Loading Test Cameras [03/11 00:45:35]
+Loading trained model at iteration 6 [03/11 00:45:35]
+
+render render_train:   0%|          | 0/12 [00:00<?, ?it/s]
+render render_train:   8%|��         | 1/12 [00:00<00:02,  4.87it/s]
+                                                                   
+render_train complete. psnr_2d: 22.374509811401367, ssim_2d: 0.4039677083492279. [03/11 00:45:35]
+reconstruction complete. psnr_3d: 28.33481216430664, ssim_3d: 0.6995670199394226 [03/11 00:45:35]
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\pipeline_manifest.json
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[train] resume: previous success retained
+[test] resume: previous success retained
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\pipeline_manifest.json
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[train] resume: previous success retained
+[test] resume: previous success retained
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\pipeline_manifest.json
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[fbp] resume: previous success retained
+[init] resume: previous success retained
+[train] resume: previous success retained
+[test] resume: previous success retained
+Pipeline manifest: D:\TEM\r2-gaussian-fbp\analysis\integration_20261103_pipeline_final\cone\dataset\pipeline_manifest.json
+PASS real center/FBP/FDK/init/train/test and repeated resume

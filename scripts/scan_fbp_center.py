@@ -79,8 +79,7 @@ def main(args):
 
     for u_px in candidates:
         # A positive detector-u offset moves the symmetry axis left in pixels.
-        # TIGRE's detector coordinate uses width / 2 as the detector origin.
-        symmetry_axis = endpoint_pair.shape[2] / 2.0 - u_px
+        symmetry_axis = (endpoint_pair.shape[2] - 1) / 2.0 - u_px
         score = pair_score(
             endpoint_pair[0], endpoint_pair[1], symmetry_axis, args.margin_px
         )

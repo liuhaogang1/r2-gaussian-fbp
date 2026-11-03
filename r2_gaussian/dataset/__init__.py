@@ -32,6 +32,7 @@ class Scene:
         shuffle=True,
     ):
         self.model_path = args.model_path
+        self.source_path = args.source_path
 
         self.train_cameras = {}
         self.test_cameras = {}

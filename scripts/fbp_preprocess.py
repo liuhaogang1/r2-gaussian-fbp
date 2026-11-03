@@ -1,9 +1,15 @@
 """Shared TIFF preprocessing for TomoPy center finding and TIGRE FBP/FDK."""
 
 from pathlib import Path
+import re
 
 import numpy as np
-from scipy.ndimage import distance_transform_edt, zoom
+from scipy.ndimage import distance_transform_edt, affine_transform, gaussian_filter
+
+
+def natural_path_key(path):
+    return tuple((1, int(part)) if part.isdigit() else (0, part.casefold())
+                 for part in re.split(r"(\d+)", str(path.name)))
 
 
 def parse_free_ray(value):
@@ -44,13 +50,13 @@ def select_tiff_paths(input_dir, projection_glob=None):
         paths = []
         seen = set()
         for pattern in patterns:
-            for path in sorted(input_dir.glob(pattern)):
+            for path in sorted(input_dir.glob(pattern), key=natural_path_key):
                 key = str(path.resolve())
                 if key not in seen:
                     paths.append(path)
                     seen.add(key)
-        return paths
-    return sorted(input_dir.glob("*.tif")) + sorted(input_dir.glob("*.tiff"))
+        return sorted(paths, key=natural_path_key)
+    return sorted(list(input_dir.glob("*.tif")) + list(input_dir.glob("*.tiff")), key=natural_path_key)
 
 
 def load_flat_field(flat_paths, dark_value=0.0):
@@ -101,6 +107,7 @@ def build_angles(args, n_views, preserve_duplicate_endpoint=False):
     angles_deg = start + np.arange(n_views, dtype=np.float32) * interval
     if (
         not preserve_duplicate_endpoint
+        and getattr(args, "mode", "parallel") == "parallel"
         and not args.keep_duplicate_endpoint
         and len(angles_deg) > 1
         and np.isclose(angles_deg[-1] - angles_deg[0], 180.0, atol=1e-4)
@@ -214,17 +221,16 @@ def process_projection(image, args, flat=None):
         height, width = image.shape
         new_height = max(1, height // args.pixel_subsample)
         new_width = max(1, width // args.pixel_subsample)
-        image = zoom(
-            image,
-            (new_height / height, new_width / width),
-            order=args.resize_order,
-        )
-        if image.shape[0] > image.shape[1]:
-            offset = (image.shape[0] - image.shape[1]) // 2
-            image = image[offset : image.shape[0] - offset]
-        elif image.shape[1] > image.shape[0]:
-            offset = (image.shape[1] - image.shape[0]) // 2
-            image = image[:, offset : image.shape[1] - offset]
+        new_height = new_width = min(new_height, new_width)
+        # Fixed physical pitch, symmetric about the original detector center.
+        # Floor dimensions crop an equal physical margin at both ends.
+        factor = float(args.pixel_subsample)
+        smoothed = gaussian_filter(image, sigma=0.5 * (factor - 1), mode="reflect")
+        offset = ((np.asarray(image.shape) - 1) -
+                  (np.asarray([new_height, new_width]) - 1) * factor) / 2
+        image = affine_transform(smoothed, np.eye(2) * factor, offset=offset,
+                                 output_shape=(new_height, new_width),
+                                 order=args.resize_order, mode="reflect")
 
     image *= np.float32(args.projection_scale)
     if not np.isfinite(image).all():
