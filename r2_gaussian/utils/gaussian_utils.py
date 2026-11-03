@@ -3,7 +3,9 @@ import numpy as np
 
 
 def inverse_softplus(x, beta=1):
-    return torch.log(torch.exp(beta * x) - 1) / beta
+    # Equivalent to log(expm1(beta*x))/beta without large-value overflow
+    # or cancellation for small positive densities.
+    return x + torch.log(-torch.expm1(-beta * x)) / beta
 
 
 def inverse_sigmoid(x):

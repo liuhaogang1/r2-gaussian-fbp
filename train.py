@@ -221,6 +221,22 @@ def _validate_shape_options(opt):
         raise ValueError("shape_hard_action must be none, prune_low, repair, split, or auto")
 
 
+def _check_model_finite(gaussians, iteration, stage):
+    """Identify the first failing training stage without masking bad values."""
+    if gaussians.get_xyz.shape[0] == 0:
+        raise ValueError(f"[ITER {iteration}] Empty Gaussian model after {stage}")
+    invalid = []
+    for name in ("_xyz", "_scaling", "_rotation", "_density"):
+        value = getattr(gaussians, name)
+        bad = ~torch.isfinite(value)
+        if bad.any():
+            invalid.append(f"{name}: {int(bad.sum().item())}/{value.numel()} nonfinite values")
+    if invalid:
+        raise ValueError(
+            f"[ITER {iteration}] Nonfinite Gaussian model after {stage}: " + "; ".join(invalid)
+        )
+
+
 def _shape_hard_process(gaussians, opt, iteration):
     """Update persistence counters and optionally prune/repair/split anomalies."""
     if not getattr(opt, "shape_enabled", False):
@@ -700,6 +716,8 @@ def training(
                 )
 
             # Optimization
+            if getattr(opt, "shape_enabled", False):
+                _check_model_finite(gaussians, iteration, "adaptive densification/pruning")
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none=True)
@@ -711,12 +729,10 @@ def training(
             # after the optimizer step, so no live autograd graph references
             # parameters that are being pruned/replaced.
             if getattr(opt, "shape_enabled", False):
+                _check_model_finite(gaussians, iteration, "optimizer step")
                 shape_action_diag = _shape_hard_process(gaussians, opt, iteration)
-                if gaussians.get_xyz.shape[0] == 0 or any(
-                    not torch.isfinite(value).all() for value in
-                    (gaussians._xyz, gaussians._scaling, gaussians._rotation, gaussians._density)
-                ):
-                    raise ValueError("Shape processing produced an empty or nonfinite model")
+                if getattr(opt, "shape_hard_action", "none") != "none":
+                    _check_model_finite(gaussians, iteration, "shape hard processing")
 
             # Save gaussians
             if iteration in saving_iterations or iteration == opt.iterations:

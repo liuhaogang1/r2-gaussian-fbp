@@ -5,7 +5,7 @@ import unittest
 import torch
 
 from r2_gaussian.gaussian.gaussian_model import GaussianModel
-from train import _shape_regularization, _shape_hard_process
+from train import _shape_regularization, _shape_hard_process, _check_model_finite
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for Gaussian smoke tests")
@@ -49,6 +49,32 @@ class ShapeSuppressionCudaTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(grad).all().item())
         self.assertGreater(grad[0].abs().sum().item(), 0.0)
         self.assertEqual(grad[1].abs().sum().item(), 0.0)
+
+    def test_ordinary_densification_keeps_bounded_short_axes_finite(self):
+        model = self.make_model()
+        model.scale_bound = [0.0005, 0.5]
+        model.setup_functions()
+        model.enable_shape_tracking()
+        with torch.no_grad():
+            model._scaling.copy_(model.scaling_inverse_activation(torch.tensor(
+                [[0.0006, 0.002, 0.2], [0.02, 0.03, 0.04]], device="cuda")))
+            model.densify_and_split(torch.ones((2, 1), device="cuda"), 0.1, 0.1)
+        self.assertEqual(len(model.get_xyz), 3)
+        _check_model_finite(model, 7000, "adaptive densification/pruning")
+        self.assertTrue((model.get_scaling > 0.0005).all())
+        self.assertEqual(len(model.shape_bad_count), 3)
+        loss, _ = _shape_regularization(model, SimpleNamespace(
+            shape_enabled=True, shape_start_iter=1, shape_end_iter=10000,
+            lambda_shape_needle=0.05, lambda_shape_sheet=0.05), 7001)
+        loss.backward()
+        self.assertTrue(torch.isfinite(model._scaling.grad).all())
+
+    def test_nonfinite_diagnostic_identifies_parameter_and_stage(self):
+        model = self.make_model()
+        with torch.no_grad():
+            model._scaling[0, 0] = -float("inf")
+        with self.assertRaisesRegex(ValueError, r"ITER 7000.*adaptive.*_scaling: 1/6"):
+            _check_model_finite(model, 7000, "adaptive densification/pruning")
 
     def test_repair_and_split_keep_optimizer_tensors_aligned(self):
         model = self.make_model()

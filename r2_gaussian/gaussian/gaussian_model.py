@@ -577,9 +577,15 @@ class GaussianModel:
         new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[
             selected_pts_mask
         ].repeat(N, 1)
-        new_scaling = self.scaling_inverse_activation(
-            self.get_scaling[selected_pts_mask].repeat(N, 1) / (0.8 * N)
-        )
+        child_scales = self.get_scaling[selected_pts_mask].repeat(N, 1) / (0.8 * N)
+        if self.scale_bound is not None:
+            # An anisotropic parent's short axes can cross the lower bound
+            # even though its longest axis qualifies for splitting. Keep
+            # children inside the sigmoid's representable open interval.
+            lower, upper = self.scale_bound
+            margin = (upper - lower) * torch.finfo(child_scales.dtype).eps
+            child_scales = child_scales.clamp(lower + margin, upper - margin)
+        new_scaling = self.scaling_inverse_activation(child_scales)
         new_rotation = self._rotation[selected_pts_mask].repeat(N, 1)
         # new_density = self._density[selected_pts_mask].repeat(N, 1)
         new_density = self.density_inverse_activation(
