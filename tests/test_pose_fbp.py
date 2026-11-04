@@ -263,6 +263,18 @@ class PoseCliTests(unittest.TestCase):
         self.assertTrue((args.output_dir / "geometry_full_pose.npz").exists())
         self.assertFalse((args.output_dir / "fbp_full_pose.npy").exists())
 
+    def test_full_mode_exports_tiny_nonzero_tilt_without_collapsing_it(self):
+        fixture = self.fixture
+        fixture.pose["beam_tilt"] = np.array([3e-8, -7e-9])
+        fixture.save_pose()
+        args = fixture.args("tiny_tilt", "--apply-beam-tilt", "--export-only")
+        report = self.run_quiet(args)
+        self.assertEqual(report["status"], "exported")
+        self.assertEqual(report["beam_tilt_application"], "3d_geometry")
+        with np.load(args.output_dir / "geometry_full_pose.npz", allow_pickle=False) as geometry:
+            np.testing.assert_array_equal(geometry["beam_tilt"], fixture.pose["beam_tilt"])
+            self.assertGreater(float(np.min(np.abs(geometry["tigre_angles"][:, 1]))), 2.9e-8)
+
     def test_existing_or_nested_output_is_rejected_without_writes(self):
         fixture = self.fixture
         args = fixture.args("existing", "--export-only")

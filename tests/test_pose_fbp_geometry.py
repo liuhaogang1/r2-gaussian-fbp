@@ -5,10 +5,12 @@ from types import SimpleNamespace
 import unittest
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from test_parallel_pose_geometry import production_angle2pose, production_pose_functions
 from r2_gaussian.utils.pose_fbp import correction_affine
 from r2_gaussian.utils.pose_fbp_geometry import (build_geometry, project_points,
+                                                tigre_angles_from_frames, tigre_rotation_matrices,
                                                 validate_geometry)
 from r2_gaussian.utils.pose_fbp_recon import (filter_projection, probe_tigre_full_geometry,
                                              reconstruct_full, reconstruct_standard, voxel_points)
@@ -69,6 +71,34 @@ def has_tigre():
 
 
 class FullGeometryTests(unittest.TestCase):
+    def test_sub_microradian_tilts_preserve_camera_frames_across_scan_angles(self):
+        cfg = scanner()
+        angles = np.linspace(-np.pi, 3 * np.pi, 37)
+        for scale in (1e-12, 1e-10, 1e-9, 1e-8, 3e-8, 7e-8, 1e-7, 3e-7, 1e-6):
+            for components in ((1, -0.7), (-1, 0.7), (0, 1), (1, 0)):
+                tilt = scale * np.array(components)
+                with self.subTest(tilt=tilt):
+                    geometry = build_geometry(cfg, angles, tilt)
+                    reconstructed = tigre_rotation_matrices(geometry["tigre_angles"])
+                    expected = np.stack((-geometry["ray_direction"], geometry["u_axis"],
+                                         -geometry["v_axis"]), axis=1)
+                    np.testing.assert_allclose(reconstructed, expected, atol=3e-15, rtol=0)
+                    np.testing.assert_array_equal(geometry["beam_tilt"], tilt)
+                    if components[0] != 0:
+                        # Keeping the NPZ value alone is insufficient: the
+                        # actual backprojector angle must retain the tilt too.
+                        self.assertGreater(float(np.min(np.abs(geometry["tigre_angles"][:, 1]))), scale * 0.9)
+
+    def test_zyz_matrix_conversion_handles_both_singularities_and_general_frames(self):
+        triples = [[first, middle, last]
+                   for middle in (0, 1e-12, 1e-8, np.pi / 2, np.pi - 1e-8, np.pi - 1e-12, np.pi)
+                   for first, last in ((0, 0), (0.7, -1.1), (-np.pi, np.pi), (2.7, 1.9))]
+        singular_frames = Rotation.from_euler("ZYZ", triples).as_matrix()
+        general_frames = Rotation.from_rotvec(np.random.default_rng(27).normal(size=(200, 3))).as_matrix()
+        frames = np.concatenate((singular_frames, general_frames))
+        np.testing.assert_allclose(tigre_rotation_matrices(tigre_angles_from_frames(frames)),
+                                   frames, atol=3e-15, rtol=0)
+
     def test_saved_geometry_matches_production_including_nonzero_tilt_offset_and_roll(self):
         cfg = scanner()
         rng = np.random.default_rng(17)

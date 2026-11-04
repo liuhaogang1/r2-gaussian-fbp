@@ -5,8 +5,6 @@ The exported geometry describes images AFTER learned shift and roll removal.
 No training modules, torch, or TIGRE are imported here.
 """
 
-import warnings
-
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -49,6 +47,33 @@ def tigre_rotation_matrices(angles):
     ])
 
 
+def tigre_angles_from_frames(frames):
+    """Decompose world-to-TIGRE frames without discarding near-singular tilt.
+
+    For M = Rz(first) Ry(middle) Rz(last), atan2(hypot(M02,M12),M22)
+    retains small middle angles even when M22 has rounded to exactly one.
+    SciPy's as_euler uses a finite gimbal-lock threshold and may collapse
+    rotations below it, which is incompatible with our strict roundtrip check.
+
+    The first/last angles are not individually stable near middle=0 or pi.
+    Recover their well-conditioned SUM near zero and DIFFERENCE near pi
+    from the upper-left block, rather than independently dividing tiny entries.
+    This also handles the exact singularities; no nonzero tilt is zeroed.
+    """
+    matrices = np.asarray(frames, dtype=np.float64)
+    if matrices.ndim != 3 or matrices.shape[1:] != (3, 3) or not np.isfinite(matrices).all():
+        raise ValueError("TIGRE camera frames must be finite (N,3,3) matrices")
+    middle = np.arctan2(np.hypot(matrices[:, 0, 2], matrices[:, 1, 2]), matrices[:, 2, 2])
+    first = np.arctan2(matrices[:, 1, 2], matrices[:, 0, 2])
+    summed = np.arctan2(matrices[:, 1, 0] - matrices[:, 0, 1],
+                        matrices[:, 0, 0] + matrices[:, 1, 1])
+    difference = np.arctan2(-matrices[:, 1, 0] - matrices[:, 0, 1],
+                            matrices[:, 1, 1] - matrices[:, 0, 0])
+    last = np.where(matrices[:, 2, 2] >= 0, summed - first, first - difference)
+    # CUDA evaluates Rz(-psi) Ry(-theta) Rz(-alpha).
+    return -np.column_stack((last, middle, first))
+
+
 def build_geometry(scanner, angles, beam_tilt=(0.0, 0.0)):
     """Return serializable ray geometry and its verified TIGRE adaptation."""
     angles = np.asarray(angles, dtype=np.float64)
@@ -62,15 +87,15 @@ def build_geometry(scanner, angles, beam_tilt=(0.0, 0.0)):
     centers = poses[:, :3, 3]
     # After the existing saved-row reversal, TIGRE detector V points along -v.
     frames = np.stack((-ray, u, -v), axis=1)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)  # ZYZ singularity is expected at zero tilt.
-        euler = Rotation.from_matrix(frames).as_euler("ZYZ")
-    tigre_angles = -euler[:, ::-1]
+    tigre_angles = tigre_angles_from_frames(frames)
     if np.all(tilt == 0):
         # Use exactly the same representation as the ordinary scalar-angle path.
         tigre_angles = np.column_stack((angles, np.zeros((len(angles), 2))))
     if not np.allclose(tigre_rotation_matrices(tigre_angles), frames, atol=1e-10, rtol=0):
-        raise ValueError("Cannot represent the camera frame in TIGRE ZYZ coordinates")
+        errors = np.max(np.abs(tigre_rotation_matrices(tigre_angles) - frames), axis=(1, 2))
+        index = int(np.argmax(errors))
+        raise ValueError("Cannot represent the camera frame in TIGRE ZYZ coordinates "
+                         f"(max matrix error {errors[index]:.6g}, view {index}, beam_tilt={tilt.tolist()})")
     # Tilt rotates about the original camera center. Project its FULL position,
     # including DSO and static offDetector, into the new detector basis.
     offsets = np.column_stack((np.sum(centers * u, axis=1), -np.sum(centers * v, axis=1)))
