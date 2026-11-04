@@ -110,6 +110,12 @@ python train.py -s /path/to/dataset -m /path/to/model \
 `shape_low_density_threshold` 或 `shape_low_mass_threshold` 设置至少一个正阈值，
 否则不会因低贡献条件删除 Gaussian。拆分模式受 `max_num_gaussians` 限制。
 
+阈值 `[5, 10, 20]` × 权重 `[0.01, 0.05, 0.1]` 的九组实验可使用
+`bash scripts/run_shape_grid.sh --input_dir ... --output_dir ... --model_path ... --config ...`。
+九组共用一次预处理和去噪初始化，每组生成一张包含 X/Y/Z 三方向 25%/50%/75% 切片的
+3×3 PNG，所有组共享灰度范围。完整参数、输出及重新出图方式见
+[九组形状遍历说明](scripts/run_shape_grid.md)。
+
 如果没有中心 JSON，删除 `--center_json`，脚本会先调用 `scan_fbp_center_tomopy.py`，并把中心结果写到输出目录同级的 `<output_dir_name>_center.json`。这要求当前环境安装 TomoPy。
 
 流程会生成：
