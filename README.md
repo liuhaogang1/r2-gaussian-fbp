@@ -116,6 +116,10 @@ python train.py -s /path/to/dataset -m /path/to/model \
 3×3 PNG，所有组共享灰度范围。完整参数、输出及重新出图方式见
 [九组形状遍历说明](scripts/run_shape_grid.md)。
 
+六组形状消融使用 `bash scripts/run_shape_ablation.sh`，须显式传入针状/片状阈值、
+两个损失权重及输入/输出路径；支持核验并复用已有九组实验的数据集与去噪初始化点。
+分组、调用示例和复用要求见 [六组形状消融说明](scripts/run_shape_ablation.md)。
+
 如果没有中心 JSON，删除 `--center_json`，脚本会先调用 `scan_fbp_center_tomopy.py`，并把中心结果写到输出目录同级的 `<output_dir_name>_center.json`。这要求当前环境安装 TomoPy。
 
 流程会生成：

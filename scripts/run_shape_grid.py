@@ -209,9 +209,12 @@ def collect_metrics(case):
 
 
 def save_progress(args, manifest):
-    atomic_json(args.output_dir / "shape_grid_manifest.json", manifest)
+    atomic_json(args.output_dir / manifest.get("manifest_filename", "shape_grid_manifest.json"), manifest)
+    extra = ("shape_enabled", "needle_enabled", "sheet_enabled", "needle_threshold",
+             "sheet_threshold", "lambda_needle", "lambda_sheet", "hard_action")
+    extra = tuple(key for key in extra if any(key in case for case in manifest["cases"]))
     rows = [{key: case.get(key, "") for key in (
-        "case", "threshold", "weight", "iteration", "status", "elapsed_seconds", "error", "volume_path", "png")}
+        "case", "threshold", "weight", "iteration", "status", "elapsed_seconds", "error", "volume_path", "png", *extra)}
         | case.get("metrics", {}) for case in manifest["cases"]]
     fields = list(dict.fromkeys(key for row in rows for key in row))
     with (args.output_dir / "summary.csv").open("w", encoding="utf-8-sig", newline="") as stream:
@@ -227,9 +230,10 @@ def plot_completed(args, manifest):
     report = render_grid(completed, manifest["metadata_path"], args.output_dir / "images")
     for item in report["cases"]:
         next(case for case in completed if case["case"] == item["case"])["png"] = item["png"]
-    manifest["plot_status"] = "completed" if len(completed) == 9 else "partial"
+    total = len(manifest["cases"])
+    manifest["plot_status"] = "completed" if len(completed) == total else "partial"
     manifest["plotted_cases"] = len(completed)
-    print(f"Images: {args.output_dir / 'images'} ({len(completed)}/9 cases, shared display window)", flush=True)
+    print(f"Images: {args.output_dir / 'images'} ({len(completed)}/{total} cases, shared display window)", flush=True)
 
 
 def main(args):
@@ -244,14 +248,23 @@ def main(args):
         save_progress(args, manifest)
         return 0 if all(case["status"] == "success" for case in manifest["cases"]) else 1
     manifest = build_plan(args)
+    return execute_plan(args, manifest)
+
+
+def execute_plan(args, manifest):
+    """Run a planned set of independent trials with fresh or reused inputs."""
     if args.dry_run:
         print("Environment: " + json.dumps(manifest["environment"]))
-        print(shlex.join(manifest["shared_command"]))
+        if manifest["shared_command"]:
+            print(shlex.join(manifest["shared_command"]))
+        else:
+            print(f"Reuse validated dataset: {Path(manifest['metadata_path']).parent}")
+            print(f"Reuse validated initialization: {manifest['init_path']}")
         for case in manifest["cases"]:
             print(f"\n[{case['case']}] -> {case['model_path']}")
             print(shlex.join(case["train_command"]))
             print(shlex.join(case["test_command"]))
-        print("Nine cases; one preprocessing/init run; nine XYZ x 25/50/75 PNGs. No files written.")
+        print(f"{len(manifest['cases'])} cases; shared data/init; one XYZ x 25/50/75 PNG per case. No files written.")
         return 0
     args.output_dir.mkdir(parents=True, exist_ok=True)
     args.model_path.mkdir(parents=True, exist_ok=True)
@@ -260,9 +273,13 @@ def main(args):
     try:
         manifest["shared_status"] = "running"
         save_progress(args, manifest)
-        run_logged(manifest["shared_command"], args.output_dir / "logs/shared.log", manifest["environment"])
+        if manifest["shared_command"]:
+            run_logged(manifest["shared_command"], args.output_dir / "logs/shared.log", manifest["environment"])
+        else:
+            print(f"[REUSE] dataset: {Path(manifest['metadata_path']).parent}", flush=True)
+            print(f"[REUSE] initialization: {manifest['init_path']}", flush=True)
         manifest["shared_identity"] = [file_identity(manifest["metadata_path"]), file_identity(manifest["init_path"])]
-        manifest["shared_status"] = "success"
+        manifest["shared_status"] = "success" if manifest["shared_command"] else "reused"
         save_progress(args, manifest)
     except (Exception, KeyboardInterrupt) as exc:
         manifest["shared_status"] = "failed"

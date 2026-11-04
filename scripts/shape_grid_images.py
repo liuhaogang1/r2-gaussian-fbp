@@ -90,9 +90,20 @@ def render_case(case, scanner, output_dir, window, expected_shape):
                 axis.set_ylabel(f"{'XYZ'[vertical]} (dataset units)")
                 axis.ticklabel_format(axis="both", style="sci", scilimits=(-3, 3))
         fig.colorbar(artist, ax=axes.ravel().tolist(), shrink=0.65, label="Gaussian density")
+        if "needle_threshold" in case:
+            header = (
+                f"{case['case']} | shape enabled = {case['shape_enabled']} | hard action = {case['hard_action']}\n"
+                f"threshold needle/sheet = {case['needle_threshold']:g}/{case['sheet_threshold']:g} | "
+                f"enabled needle/sheet = {case['needle_enabled']}/{case['sheet_enabled']}\n"
+                f"lambda needle/sheet = {case['lambda_needle']:g}/{case['lambda_sheet']:g} | iteration {case['iteration']}\n"
+            )
+        else:
+            header = (
+                f"{case['case']} | needle/sheet threshold = {case['threshold']:g}\n"
+                f"lambda needle = lambda sheet = {case['weight']:g} | iteration {case['iteration']}\n"
+            )
         fig.suptitle(
-            f"{case['case']} | needle/sheet threshold = {case['threshold']:g}\n"
-            f"lambda needle = lambda sheet = {case['weight']:g} | iteration {case['iteration']}\n"
+            header +
             f"Rows: X / Y / Z | Columns: 25% / 50% / 75% | shared window [{window[0]:.6g}, {window[1]:.6g}]",
             fontsize=12,
         )
