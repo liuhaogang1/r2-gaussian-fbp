@@ -15,7 +15,7 @@ from unittest import mock
 import numpy as np
 
 from scripts import apply_pose_fbp as cli
-from r2_gaussian.utils.artifact_utils import dataset_identity
+from r2_gaussian.utils.artifact_utils import dataset_identity, file_identity
 from r2_gaussian.utils.pose_fbp import (correct_projection, export_projections,
                                        load_inputs, read_exported_projections)
 
@@ -228,6 +228,10 @@ class PoseCliTests(unittest.TestCase):
         spacing = np.asarray(fixture.scanner["sVoxel"]) / fixture.scanner["nVoxel"]
         np.testing.assert_allclose(struct.unpack_from("<3f", data, 80), spacing)
         self.assertTrue((output / "comparison_xyz.png").is_file())
+        self.assertEqual(report["blink_comparison"]["status"], "written")
+        self.assertEqual(report["blink_comparison"]["reference"]["selection"], "same_run_original")
+        for normal in "xyz":
+            self.assertTrue((output / f"blink_center_{normal}.gif").is_file())
 
     def test_ablation_exports_four_comparable_reconstructions(self):
         fixture = self.fixture
@@ -248,6 +252,90 @@ class PoseCliTests(unittest.TestCase):
         self.assertFalse((args.output_dir / "fbp_original.npy").exists())
         self.assertFalse((args.output_dir / "ablation").exists())
         self.assertTrue((args.output_dir / "geometry_full_pose.npz").exists())
+        self.assertEqual(report["blink_comparison"]["status"], "skipped")
+        self.assertFalse((args.output_dir / "blink_center_z.gif").exists())
+
+    def test_full_blinks_use_existing_bound_train_fbp_and_one_reconstruction(self):
+        from PIL import Image
+
+        fixture = self.fixture
+        path = fixture.dataset / "vol_train_fbp.npy"
+        shape = tuple(fixture.scanner["nVoxel"])
+        original = np.linspace(-0.4, 2, np.prod(shape), dtype=np.float32).reshape(shape)
+        np.save(path, original)
+        before = file_identity(path)
+        path.with_suffix(".cache.json").write_text(json.dumps({
+            "signature": {"dataset": dataset_identity(fixture.dataset)}, "artifact": before}), encoding="utf-8")
+        args = fixture.args("full_blinks", "--apply-beam-tilt")
+        with mock.patch.object(cli, "reconstruct_full", wraps=cli.reconstruct_full) as full, \
+             mock.patch.object(cli, "reconstruct_standard", side_effect=AssertionError("no extra baseline")):
+            report = self.run_quiet(args)
+        self.assertEqual(full.call_count, 1)
+        self.assertEqual(set(report["volumes"]), {"fbp_full_pose"})
+        blink = report["blink_comparison"]
+        self.assertEqual(blink["reference"]["binding"], "verified_dataset_and_volume_hash")
+        self.assertEqual(blink["reference"]["identity"], before)
+        self.assertEqual(file_identity(path), before)
+        self.assertEqual(blink["shared_display_window"], report["preview"]["shared_display_window"])
+        expected_window = np.percentile(original[original > 0], [1, 99.5])
+        np.testing.assert_allclose(blink["shared_display_window"], expected_window)
+        corrected = np.load(args.output_dir / "fbp_full_pose.npy")
+        low, high = expected_window
+        for axis, normal in enumerate("xyz"):
+            with Image.open(args.output_dir / blink["files"][normal]) as gif:
+                self.assertEqual(gif.n_frames, 2)
+                self.assertEqual(gif.info["loop"], 0)
+                for frame_index, volume in enumerate((original, corrected)):
+                    gif.seek(frame_index)
+                    self.assertEqual(gif.info["duration"], 900)
+                    plane = np.take(volume, shape[axis] // 2, axis=axis)
+                    expected = np.round(np.clip((plane - low) / (high - low), 0, 1).T[::-1] * 255).astype(np.uint8)
+                    expected = expected.repeat(2, axis=0).repeat(2, axis=1)
+                    left = (gif.width - expected.shape[1]) // 2
+                    actual = np.asarray(gif.convert("L"))[44:44 + expected.shape[0], left:left + expected.shape[1]]
+                    np.testing.assert_array_equal(actual, expected)
+
+    def test_reference_binding_rejects_wrong_dataset_or_modified_volume(self):
+        fixture = self.fixture
+        path = fixture.dataset / "vol_train_fbp.npy"
+        np.save(path, np.ones(fixture.scanner["nVoxel"], np.float32))
+        sidecar = path.with_suffix(".cache.json")
+        for dataset_hash, volume_hash in (("wrong", file_identity(path)["sha256"]),
+                                          (dataset_identity(fixture.dataset), "wrong")):
+            sidecar.write_text(json.dumps({"signature": {"dataset": dataset_hash},
+                                          "artifact": {"sha256": volume_hash}}), encoding="utf-8")
+            reference, info = cli._load_comparison_reference(fixture.inputs(), None)
+            self.assertIsNone(reference)
+            self.assertEqual(info["status"], "skipped")
+            self.assertIn("does not match", info["reason"])
+            with self.assertRaisesRegex(ValueError, "--comparison-volume"):
+                cli._load_comparison_reference(fixture.inputs(), path)
+
+    def test_explicit_reference_checks_grid_and_marks_missing_provenance(self):
+        fixture = self.fixture
+        path = fixture.root / "custom_fbp.npy"
+        np.save(path, np.ones((2, 3, 4), np.float32))
+        with self.assertRaisesRegex(ValueError, "nVoxel grid"):
+            cli._load_comparison_reference(fixture.inputs(), path)
+        np.save(path, np.ones(fixture.scanner["nVoxel"], np.float32))
+        reference, info = cli._load_comparison_reference(fixture.inputs(), path)
+        try:
+            self.assertEqual(info["binding"], "unverified_no_cache_sidecar")
+            self.assertEqual(info["selection"], "explicit")
+        finally:
+            reference._mmap.close()
+        args = fixture.args("invalid_comparison", "--comparison-volume", str(path))
+        with self.assertRaisesRegex(ValueError, "requires --apply-beam-tilt"):
+            self.run_quiet(args)
+        self.assertFalse(args.output_dir.exists())
+
+    def test_missing_train_reference_does_not_substitute_all_view_volume(self):
+        fixture = self.fixture
+        np.save(fixture.dataset / "vol_fbp.npy", np.ones(fixture.scanner["nVoxel"], np.float32))
+        reference, info = cli._load_comparison_reference(fixture.inputs(), None)
+        self.assertIsNone(reference)
+        self.assertEqual(info["status"], "skipped")
+        self.assertEqual(Path(info["path"]).name, "vol_train_fbp.npy")
 
     def test_mode_flags_are_mutually_exclusive_before_any_output(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

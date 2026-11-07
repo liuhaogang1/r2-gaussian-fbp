@@ -1,18 +1,26 @@
 """Production-camera equivalence and independent analytic phantom checks."""
 
 import importlib.util
+import json
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 import numpy as np
+from scipy.ndimage import map_coordinates
 from scipy.spatial.transform import Rotation
 
+from scripts import apply_pose_fbp as cli
 from test_parallel_pose_geometry import production_angle2pose, production_pose_functions
-from r2_gaussian.utils.pose_fbp import correction_affine
+from r2_gaussian.utils.artifact_utils import dataset_identity
+from r2_gaussian.utils.pose_fbp import correct_projection, correction_affine, read_exported_projections
 from r2_gaussian.utils.pose_fbp_geometry import (build_geometry, project_points,
                                                 tigre_angles_from_frames, tigre_rotation_matrices,
                                                 validate_geometry)
-from r2_gaussian.utils.pose_fbp_recon import (filter_projection, probe_tigre_full_geometry,
+from r2_gaussian.utils.pose_fbp_recon import (FILTERS, filter_projection, probe_tigre_full_geometry,
+                                             probe_tigre_standard_geometry,
                                              reconstruct_full, reconstruct_standard, voxel_points)
 
 
@@ -31,32 +39,40 @@ def production_camera(cfg, angle, delta=0.0, tilt=(0, 0), roll=0.0):
     return methods["_correct_parallel_c2w"](camera, values, "cpu")
 
 
-def analytic_data(cfg, angles, tilt):
+def analytic_data(cfg, angles, tilt, deltas=None, shifts=None, roll=0, covariances=None):
     """Line integrals through 3D Gaussians using the PRODUCTION camera frame.
 
     This generator uses neither the new geometry conversion nor an image warp;
     it integrates a known physical density along the actual acquisition rays.
     """
     centers = np.array([[0.23, 0.16, -0.19], [-0.27, -0.22, 0.24]])
-    sigma, amplitudes = 0.105, np.array([1.0, 0.75])
+    amplitudes = np.array([1.0, 0.75])
+    if covariances is None:
+        covariances = [np.eye(3) * 0.105**2] * 2
+    precision_matrices = [np.linalg.inv(covariance) for covariance in covariances]
+    deltas = np.zeros(len(angles)) if deltas is None else deltas
+    shifts = np.zeros((len(angles), 2)) if shifts is None else shifts
     vv, uu = np.indices(cfg["nDetector"])
     pitch = np.asarray(cfg["sDetector"]) / cfg["nDetector"]
     centered_u = (uu - (uu.shape[1] - 1) / 2) * pitch[1]
     centered_v = (vv - (vv.shape[0] - 1) / 2) * pitch[0]
     projections = []
-    for angle in angles:
-        camera = production_camera(cfg, angle, tilt=tilt)
-        detector = (camera[:3, 3] + centered_u[..., None] * camera[:3, 0]
-                    + centered_v[..., None] * camera[:3, 1])
+    for index, angle in enumerate(angles):
+        camera = production_camera(cfg, angle, delta=deltas[index], tilt=tilt, roll=roll)
+        detector = (camera[:3, 3] + (centered_u - shifts[index, 0] * pitch[1])[..., None] * camera[:3, 0]
+                    + (centered_v - shifts[index, 1] * pitch[0])[..., None] * camera[:3, 1])
         image = np.zeros(vv.shape, np.float64)
-        for center, amplitude in zip(centers, amplitudes):
+        for center, amplitude, precision in zip(centers, amplitudes, precision_matrices):
             difference = detector - center
-            perpendicular = difference - np.sum(difference * camera[:3, 2], axis=-1)[..., None] * camera[:3, 2]
-            image += amplitude * np.sqrt(2 * np.pi) * sigma * np.exp(-np.sum(perpendicular ** 2, axis=-1) / (2 * sigma ** 2))
+            ray = camera[:3, 2]
+            ray_precision = ray @ precision @ ray
+            closest = difference - ((difference @ precision @ ray) / ray_precision)[..., None] * ray
+            quadratic = np.sum((closest @ precision) * closest, axis=-1)
+            image += amplitude * np.sqrt(2 * np.pi / ray_precision) * np.exp(-quadratic / 2)
         projections.append(image)
     points = voxel_points(cfg, 0, int(np.prod(cfg["nVoxel"])))
-    truth = sum(amplitude * np.exp(-np.sum((points - center) ** 2, axis=1) / (2 * sigma ** 2))
-                for center, amplitude in zip(centers, amplitudes)).reshape(cfg["nVoxel"])
+    truth = sum(amplitude * np.exp(-np.sum(((points - center) @ precision) * (points - center), axis=1) / 2)
+                for center, amplitude, precision in zip(centers, amplitudes, precision_matrices)).reshape(cfg["nVoxel"])
     return np.asarray(projections, np.float32), truth
 
 
@@ -68,6 +84,70 @@ def has_tigre():
         return torch.cuda.is_available()
     except (ValueError, ImportError):
         return False
+
+
+def simulated_tigre_kernel(origin_order, detector_order, coordinate_bias=(0, 0), gain=1):
+    """Emulate the Python/CUDA ABI, including texture coordinate quantization."""
+    def backproject(filtered, geometry, cfg, layout=None):
+        encoded_origin = np.array(cfg["offOrigin"])
+        if layout["off_origin_order"] == "zyx":
+            encoded_origin = encoded_origin[::-1]
+        interpreted_origin = encoded_origin if origin_order == "xyz" else encoded_origin[::-1]
+        points = voxel_points(cfg, 0, int(np.prod(cfg["nVoxel"])))
+        points = points - np.array(cfg["offOrigin"]) + interpreted_origin
+        encoded_offsets = geometry["tigre_offset_uv"][0]
+        if layout["off_detector_order"] == "vu":
+            encoded_offsets = encoded_offsets[::-1]
+        offsets = encoded_offsets if detector_order == "uv" else encoded_offsets[::-1]
+        frame = tigre_rotation_matrices(geometry["tigre_angles"])[0]
+        coordinates = points @ frame.T
+        uv = (coordinates[:, 1:3] - offsets) / geometry["pixel_size_vu"][::-1]
+        uv += (geometry["nDetector"][::-1] - 1) / 2
+        uv[:, 1] = geometry["nDetector"][0] - 1 - uv[:, 1]
+        uv += coordinate_bias
+        uv = np.round(uv * 256) / 256
+        values = map_coordinates(filtered[0], [uv[:, 1], uv[:, 0]], order=1,
+                                 mode="grid-constant", cval=0, prefilter=False)
+        return (values * gain).reshape(cfg["nVoxel"])
+    return backproject
+
+
+class TigreLayoutProbeTests(unittest.TestCase):
+    def setUp(self):
+        probe_tigre_full_geometry.cache_clear()
+        probe_tigre_standard_geometry.cache_clear()
+        self.addCleanup(probe_tigre_full_geometry.cache_clear)
+        self.addCleanup(probe_tigre_standard_geometry.cache_clear)
+
+    def test_detects_all_known_origin_and_detector_encodings_and_caches_result(self):
+        for probe in (probe_tigre_full_geometry, probe_tigre_standard_geometry):
+            for origin, detector in (("xyz", "uv"), ("xyz", "vu"), ("zyx", "uv"), ("zyx", "vu")):
+                with self.subTest(probe=probe.__name__, origin=origin, detector=detector):
+                    probe.cache_clear()
+                    with mock.patch("r2_gaussian.utils.pose_fbp_recon._tigre_backproject",
+                                    side_effect=simulated_tigre_kernel(origin, detector)) as kernel:
+                        result = probe()
+                        calls = kernel.call_count
+                        self.assertEqual(result["layout"], {"off_origin_order": origin,
+                                                          "off_detector_order": detector})
+                        self.assertLess(result["max_coordinate_error_px"], 0.002)
+                        self.assertEqual(result["constant_gain_error"], 0)
+                        self.assertEqual(probe(), result)
+                        self.assertEqual(kernel.call_count, calls)
+
+    def test_separate_coordinate_checks_reject_errors_that_cancel_in_old_ramp(self):
+        # 0.2*0.03 + 0.3*(-0.02) = 0: the previous combined-ramp check could
+        # hide this misregistration regardless of its intensity tolerance.
+        with mock.patch("r2_gaussian.utils.pose_fbp_recon._tigre_backproject",
+                        side_effect=simulated_tigre_kernel("xyz", "uv", coordinate_bias=(0.03, -0.02))):
+            with self.assertRaisesRegex(RuntimeError, "0 valid layouts"):
+                probe_tigre_full_geometry()
+
+    def test_probe_rejects_wrong_backprojection_normalization(self):
+        with mock.patch("r2_gaussian.utils.pose_fbp_recon._tigre_backproject",
+                        side_effect=simulated_tigre_kernel("zyx", "vu", gain=1.01)):
+            with self.assertRaisesRegex(RuntimeError, "no partial fallback"):
+                probe_tigre_full_geometry()
 
 
 class FullGeometryTests(unittest.TestCase):
@@ -166,6 +246,35 @@ class FullGeometryTests(unittest.TestCase):
         wider_pixels = filter_projection(image, [0.1, 0.2], [1, 0], 30)
         np.testing.assert_allclose(wider_pixels, horizontal / 2, atol=1e-8)
 
+    def test_directional_filter_is_continuous_at_axes_for_landscape_and_portrait(self):
+        for shape in ((31, 129), (129, 31), (48, 64)):
+            vv, uu = np.indices(shape)
+            image = np.exp(-((uu - shape[1] / 2)**2 + (vv - shape[0] / 2)**2) / 18).astype(np.float32)
+            for filter_name in FILTERS:
+                for direction, near in (([1, 0], [1, 1e-10]), ([0, 1], [1e-10, 1])):
+                    with self.subTest(shape=shape, filter_name=filter_name, direction=direction):
+                        exact = filter_projection(image, [0.035, 0.027], direction, 90, filter_name)
+                        perturbed = filter_projection(image, [0.035, 0.027], near, 90, filter_name)
+                        relative = np.linalg.norm(perturbed - exact) / np.linalg.norm(exact)
+                        self.assertLess(relative, 2e-6)
+
+    def test_all_pose_components_correct_an_independent_anisotropic_phantom(self):
+        cfg = scanner()
+        angles = np.linspace(0, 2 * np.pi, 73, endpoint=False)
+        deltas = 0.004 * np.sin(2 * angles)
+        shifts = np.column_stack((1.3 + 0.6 * np.cos(angles), -0.7 + 0.5 * np.sin(angles)))
+        tilt, roll = [0.006, -0.004], 0.008
+        covariances = [np.diag(np.square([0.09, 0.07, 0.13])), np.diag(np.square([0.07, 0.12, 0.08]))]
+        raw, truth = analytic_data(cfg, angles, tilt, deltas, shifts, roll, covariances)
+        ideal, _ = analytic_data(cfg, angles + deltas, tilt, covariances=covariances)
+        pitch = np.asarray(cfg["sDetector"]) / cfg["nDetector"]
+        corrected = np.stack([correct_projection(image, pitch, shift, roll)[0]
+                              for image, shift in zip(raw, shifts)])
+        self.assertLess(np.linalg.norm(corrected - ideal) / np.linalg.norm(ideal), 0.03)
+        full = reconstruct_full(corrected, build_geometry(cfg, angles + deltas, tilt), cfg, backend="cpu")
+        original = reconstruct_standard(raw, angles, cfg, backend="cpu")
+        self.assertLess(np.mean((full - truth)**2), np.mean((original - truth)**2) * 0.5)
+
     def test_full_fbp_improves_independent_tilted_phantom(self):
         cfg = scanner()
         angles = np.linspace(0, 2 * np.pi, 90, endpoint=False)
@@ -196,6 +305,66 @@ class FullGeometryTests(unittest.TestCase):
         zero_geometry = build_geometry(cfg, angles)
         np.testing.assert_array_equal(reconstruct_full(projections, zero_geometry, cfg),
                                       reconstruct_standard(projections, angles, cfg))
+
+    @unittest.skipUnless(has_tigre(), "Requires installed PyTorch/TIGRE and CUDA")
+    def test_gpu_zero_tilt_limit_and_all_filters_use_the_same_physical_scale(self):
+        cfg = {**scanner(), "nVoxel": [11, 13, 9], "nDetector": [39, 31], "sDetector": [1.755, 1.705]}
+        for count in (17, 18):
+            angles = np.linspace(0, 2 * np.pi, count, endpoint=False)
+            projections, _ = analytic_data(cfg, angles, [0, 0])
+            for name in FILTERS:
+                with self.subTest(count=count, filter=name):
+                    gpu = reconstruct_standard(projections, angles, cfg, name, "tigre")
+                    cpu = reconstruct_standard(projections, angles, cfg, name, "cpu")
+                    tiny = reconstruct_full(projections, build_geometry(cfg, angles, [1e-10, -1e-10]),
+                                            cfg, name, "tigre")
+                    self.assertLess(np.linalg.norm(gpu - cpu) / np.linalg.norm(cpu), 0.01)
+                    self.assertLess(np.linalg.norm(tiny - gpu) / np.linalg.norm(gpu), 0.002)
+
+    @unittest.skipUnless(has_tigre(), "Requires installed PyTorch/TIGRE and CUDA")
+    def test_real_gpu_cli_reads_saved_all_pose_inputs_and_exports_matching_nifti(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "dataset"
+            (dataset / "proj_train").mkdir(parents=True)
+            cfg = {**scanner(), "nVoxel": [11, 13, 9], "nDetector": [39, 31], "sDetector": [1.755, 1.705]}
+            angles = np.linspace(0, 2 * np.pi, 37, endpoint=False)
+            delta = 0.003 * np.sin(angles)
+            global_shift = np.array([1.3, -0.7])
+            view_shift = np.column_stack((0.3 * np.cos(angles), 0.2 * np.sin(angles)))
+            tilt, roll = np.array([0.006, -0.004]), 0.008
+            raw, _ = analytic_data(cfg, angles, tilt, delta, global_shift + view_shift, roll)
+            records = []
+            for index, (image, angle) in enumerate(zip(raw, angles)):
+                filename = f"proj_train/view{index:03d}.npy"
+                np.save(dataset / filename, image)
+                records.append({"file_path": filename, "angle": float(angle)})
+            (dataset / "meta_data.json").write_text(json.dumps({"scanner": cfg, "proj_train": records}), encoding="utf-8")
+            pose_path = root / "model" / "pose_offsets.npz"
+            pose_path.parent.mkdir()
+            np.savez(pose_path, binding_version=np.array(1), pose_format_version=np.array(2),
+                     model_iteration=np.array(30000), scanner_mode=np.array("parallel"),
+                     dataset_identity=np.array(dataset_identity(dataset)),
+                     image_ids=np.array([f"view{i:03d}" for i in range(len(angles))])[::-1],
+                     base_angles=angles[::-1], delta_angle=delta[::-1], view_shift=view_shift[::-1],
+                     global_shift=global_shift, beam_tilt=tilt, detector_roll=np.array([roll]))
+            output = root / "full"
+            args = cli.build_parser().parse_args(["--dataset", str(dataset), "--pose", str(pose_path),
+                "--iteration", "30000", "--output-dir", str(output), "--apply-beam-tilt", "--filter", "hann"])
+            before = dataset_identity(dataset)
+            report = cli.run(args)
+            self.assertEqual(report["status"], "complete")
+            self.assertEqual(dataset_identity(dataset), before)
+            projections, corrected_angles, _ = read_exported_projections(output)
+            reference = reconstruct_full(projections, build_geometry(cfg, corrected_angles, tilt), cfg, "hann", "cpu")
+            actual = np.load(output / "fbp_full_pose.npy")
+            self.assertLess(np.linalg.norm(actual - reference) / np.linalg.norm(reference), 0.01)
+            self.assertTrue((output / "fbp_full_pose_slices.png").exists())
+            import gzip
+            with gzip.open(output / "fbp_full_pose.nii.gz", "rb") as stream:
+                payload = stream.read()
+            exported = np.frombuffer(payload, dtype="<f4", offset=352).reshape(cfg["nVoxel"], order="F")
+            np.testing.assert_array_equal(exported, actual)
 
 
 if __name__ == "__main__":

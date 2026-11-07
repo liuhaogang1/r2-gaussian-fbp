@@ -2,6 +2,7 @@
 
 import argparse
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import sys
 import time
@@ -20,7 +21,7 @@ from r2_gaussian.utils.pose_fbp import (  # noqa: E402
 )
 from r2_gaussian.utils.pose_fbp_geometry import build_geometry, load_geometry  # noqa: E402
 from r2_gaussian.utils.pose_fbp_recon import (  # noqa: E402
-    FILTERS, backend_provenance, probe_tigre_full_geometry, reconstruct_full,
+    FILTERS, backend_provenance, probe_tigre_full_geometry, probe_tigre_standard_geometry, reconstruct_full,
     reconstruct_standard, require_backend, software_versions,
 )
 from r2_gaussian.utils.volume_export_utils import save_nifti_xyz, volume_geometry  # noqa: E402
@@ -40,6 +41,8 @@ def build_parser():
     parser.add_argument("--filter", choices=FILTERS, default="ram_lak",
                         help="Explicit effective filter shared by every comparison; default matches upstream TIGRE FBP")
     parser.add_argument("--export-only", action="store_true", help="Save projections and full geometry if selected; no reconstruction dependency required")
+    parser.add_argument("--comparison-volume", type=Path,
+                        help="Full mode: existing XYZ FBP for blinking comparison; defaults to <dataset>/vol_train_fbp.npy")
     return parser
 
 
@@ -52,24 +55,36 @@ def _save_volume(volume, scanner, output, name):
     return geometry
 
 
+def _display_window(reference):
+    # Same rule as prepare_fbp_tiff.save_fbp_preview(): percentiles of the
+    # positive volume, so zero/negative background is black. Comparisons use
+    # the FIRST volume's window for both images, never independent contrast.
+    positive = reference[np.isfinite(reference) & (reference > 0)]
+    if positive.size:
+        low, high = np.percentile(positive, [1, 99.5])
+        if high <= low:
+            low, high = float(positive.min()), float(positive.max())
+        if high <= low:
+            high = low + 1
+    else:
+        low, high = 0.0, 1.0
+    del positive
+    return float(low), float(high)
+
+
 def _save_comparison(volumes, scanner, output):
-    """Every volume and every plane shares ONE display window; raw data stays unchanged."""
+    """Match prepare_fbp_tiff previews, sharing the reference's positive window."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    spacing, _ = volume_geometry(next(iter(volumes.values())).shape, scanner)
+    reference_name, reference = next(iter(volumes.items()))
+    low, high = _display_window(reference)
+    spacing, _ = volume_geometry(reference.shape, scanner)
     planes = []
     for volume in volumes.values():
         x, y, z = (size // 2 for size in volume.shape)
         planes.append((volume[x], volume[:, y], volume[:, :, z]))
-    values = np.concatenate([plane.ravel()[::max(1, plane.size // 100000)]
-                             for row in planes for plane in row])
-    low, high = np.percentile(values, [1, 99])
-    if high <= low:
-        low, high = float(values.min()), float(values.max())
-        if high <= low:
-            high = low + 1
     fig, axes = plt.subplots(len(volumes), 3, figsize=(13, 4 * len(volumes)),
                              squeeze=False, constrained_layout=True)
     try:
@@ -86,7 +101,97 @@ def _save_comparison(volumes, scanner, output):
             fig.savefig(stream, format="png", dpi=140)
     finally:
         plt.close(fig)
-    return {"shared_display_window": [float(low), float(high)]}
+    return {"shared_display_window": [float(low), float(high)],
+            "window_reference": reference_name, "window_rule": "positive_volume_percentiles_1_99.5"}
+
+
+def _load_comparison_reference(inputs, requested):
+    """Read an existing train-view FBP, without starting another reconstruction."""
+    path = (requested if requested is not None else inputs.dataset / "vol_train_fbp.npy").resolve()
+    info = {"path": str(path), "selection": "explicit" if requested is not None else "dataset_train_fbp",
+            "additional_reconstruction": False,
+            "note": "Existing FBP retains its original filtering/normalization; this is not an isolated pose ablation."}
+    volume = None
+    try:
+        reference_identity = file_identity(path)
+        volume = np.load(path, mmap_mode="r", allow_pickle=False)
+        if not isinstance(volume, np.ndarray):
+            volume.close()
+            volume = None
+            raise ValueError("Comparison volume must be a single .npy array")
+        if (volume.shape != tuple(inputs.scanner["nVoxel"])
+                or not np.issubdtype(volume.dtype, np.floating) or not np.isfinite(volume).all()):
+            raise ValueError("Comparison volume must be finite floating-point XYZ on the dataset nVoxel grid")
+        sidecars = [candidate for suffix in (".cache.json", ".stripe.json")
+                    if (candidate := path.with_suffix(suffix)).exists()]
+        if sidecars:
+            bound = False
+            for sidecar in sidecars:
+                try:
+                    cached = json.loads(sidecar.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if (isinstance(cached, dict) and isinstance(cached.get("signature"), dict)
+                        and isinstance(cached.get("artifact"), dict)
+                        and cached["signature"].get("dataset") == inputs.dataset_hash
+                        and cached["artifact"].get("sha256") == reference_identity["sha256"]):
+                    bound = True
+                    info["cache_sidecar"] = file_identity(sidecar)
+                    break
+            if not bound:
+                raise ValueError("Comparison FBP cache does not match the training dataset or volume content")
+            info["binding"] = "verified_dataset_and_volume_hash"
+        else:
+            # Older volumes have no sidecar. State that view/geometry provenance
+            # is unverified; never silently substitute an all-view or denoised FBP.
+            info["binding"] = "unverified_no_cache_sidecar"
+        if file_identity(path) != reference_identity:
+            raise ValueError("Comparison volume changed while being loaded")
+        info["identity"] = reference_identity
+        return volume, info
+    except (OSError, ValueError) as error:
+        if volume is not None and getattr(volume, "_mmap", None) is not None:
+            volume._mmap.close()
+        if requested is not None:
+            raise ValueError(f"Cannot use --comparison-volume {path}: {error}") from error
+        info.update(status="skipped", reason=str(error))
+        return None, info
+
+
+def _save_blink_comparison(reference, corrected, output, display):
+    """Fixed grayscale palette, shared window and identical XYZ slice indices."""
+    from PIL import Image, ImageDraw
+
+    low, high = display["shared_display_window"]
+    palette = [value for value in range(256) for _ in range(3)]
+    files = {}
+    for axis, normal in enumerate("xyz"):
+        index = reference.shape[axis] // 2
+        frames = []
+        for volume, label in ((reference, "Original FBP"), (corrected, "Pose-corrected FBP")):
+            plane = np.take(volume, index, axis=axis)
+            pixels = np.round(np.flipud(np.clip((plane - low) / (high - low), 0, 1).T) * 255).astype(np.uint8)
+            image = Image.fromarray(pixels)
+            scale = 2 if max(image.size) <= 256 else 1
+            image = image.resize((image.width * scale, image.height * scale), Image.Resampling.NEAREST)
+            frame = Image.new("L", (max(256, image.width), image.height + 44), 0)
+            draw = ImageDraw.Draw(frame)
+            draw.text((8, 4), label, fill=255)
+            draw.text((8, 23), f"{normal.upper()} center | index {index}", fill=255)
+            frame.paste(image, ((frame.width - image.width) // 2, 44))
+            frame = frame.convert("P")
+            frame.putpalette(palette)
+            frames.append(frame)
+        filename = f"blink_center_{normal}.gif"
+        with (output / filename).open("xb") as stream:
+            frames[0].save(stream, format="GIF", save_all=True, append_images=frames[1:],
+                           duration=900, loop=0, optimize=False, disposal=2)
+        files[normal] = filename
+    return {"status": "written", "files": files, "frame_duration_ms": 900, "loop": "forever",
+            "frame_order": ["original_fbp", "pose_corrected_fbp"],
+            "center_indices_xyz": [size // 2 for size in reference.shape], **display,
+            "orientation": "flipud(plane.T), matching prepare_fbp_tiff PNGs",
+            "volume_data_modified": False, "registration_applied": False}
 
 
 def _input_unchanged(inputs):
@@ -98,6 +203,8 @@ def _input_unchanged(inputs):
 def run(args):
     if args.apply_beam_tilt and args.ablation:
         raise ValueError("--apply-beam-tilt and --ablation are mutually exclusive")
+    if args.comparison_volume is not None and not args.apply_beam_tilt:
+        raise ValueError("--comparison-volume requires --apply-beam-tilt; partial mode already reconstructs its original baseline")
     output = args.output_dir.resolve()
     if output.exists():
         raise FileExistsError(f"Output directory must not already exist: {output}")
@@ -113,8 +220,8 @@ def run(args):
     probe = {"status": "not_run_export_only"}
     if not args.export_only:
         require_backend(args.backend)
-        if args.apply_beam_tilt and args.backend == "tigre":
-            probe = probe_tigre_full_geometry()
+        if args.backend == "tigre":
+            probe = probe_tigre_full_geometry() if args.apply_beam_tilt else probe_tigre_standard_geometry()
         else:
             probe = {"status": "cpu_reference" if args.backend == "cpu" else "standard_path"}
     report = {
@@ -133,8 +240,9 @@ def run(args):
                                   "beam_tilt": "geometry" if args.apply_beam_tilt else "ignored"},
         "interpolation": {"order": 1, "mode": "constant", "fill": 0, "mask": "supported_pixel_center_domain"},
         "effective_filter": args.filter, "scanner_configured_filter": inputs.scanner.get("filter"),
-        "angle_quadrature": "uniform_existing_TIGRE_normalization",
-        "view_weights": [1.0] * len(inputs.records), "extra_spacing_weights": False,
+        "angle_quadrature": "uniform_pi_over_n",
+        "view_weights": [float(np.pi / len(inputs.records))] * len(inputs.records), "extra_spacing_weights": False,
+        "filter_implementation": "shared_physical_frequency_ramp_zero_dc",
         "backend": args.backend, "backend_probe": probe, "ablation": args.ablation,
         "export_only": args.export_only, "software": software_versions(),
         "implementation": [file_identity(ROOT / path) for path in (
@@ -206,7 +314,32 @@ def run(args):
                     record_volume(f"fbp_{name}", reconstruct_standard(projections, angles, inputs.scanner, args.filter, args.backend))
                     del projections
             preview = "fbp_full_pose_slices.png" if args.apply_beam_tilt else "comparison_xyz.png"
-            report["preview"] = _save_comparison(volumes, inputs.scanner, output / preview)
+            if args.apply_beam_tilt:
+                reference, reference_info = _load_comparison_reference(inputs, args.comparison_volume)
+                if reference is not None:
+                    # Include the existing reference in the preview only; the
+                    # volumes report still lists just newly reconstructed data.
+                    volumes["fbp_existing_reference"] = reference
+                    preview_volumes = {"fbp_existing_reference": reference, "fbp_full_pose": volumes["fbp_full_pose"]}
+                else:
+                    preview_volumes = volumes
+                corrected = volumes["fbp_full_pose"]
+            else:
+                reference = volumes["fbp_original"]
+                reference_info = {"selection": "same_run_original", "additional_reconstruction": False,
+                                  "identity": file_identity(output / "fbp_original.npy")}
+                corrected = volumes["fbp_partial"]
+                preview_volumes = volumes
+            report["preview"] = _save_comparison(preview_volumes, inputs.scanner, output / preview)
+            if reference is not None:
+                report["blink_comparison"] = _save_blink_comparison(reference, corrected, output, report["preview"])
+                report["blink_comparison"]["reference"] = reference_info
+                if file_identity(reference_info["identity"]["path"]) != reference_info["identity"]:
+                    raise ValueError("Comparison volume changed during preview generation")
+                print("Saved blink_center_x.gif, blink_center_y.gif, blink_center_z.gif", flush=True)
+            else:
+                report["blink_comparison"] = reference_info
+                print(f"Blink comparison skipped: {reference_info['reason']}", flush=True)
             report["status"] = "complete"
             report["reconstruction_performed"] = True
         _input_unchanged(inputs)

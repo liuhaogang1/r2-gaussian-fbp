@@ -8,6 +8,7 @@ of an exact inverse for incomplete data.
 
 import importlib
 import inspect
+from functools import lru_cache
 
 import numpy as np
 from scipy import fft
@@ -35,26 +36,25 @@ def _filter_window(frequency, name):
 
 
 def _fft_length(count):
-    # Match TIGRE's strict next-power-of-two padding for the zero-tilt limit.
+    # A fixed padding rule shared by both branches and all installed backends.
     return max(64, 1 << (2 * int(count)).bit_length())
 
 
 def _ramp_response(length):
-    positions = np.arange(-length // 2, length // 2, dtype=np.float64)
-    kernel = np.zeros(length, dtype=np.float64)
-    kernel[length // 2] = 0.25
-    odd = (positions.astype(np.int64) % 2) != 0
-    kernel[odd] = -1 / (np.pi * positions[odd]) ** 2
-    return 2 * np.abs(np.fft.rfft(kernel))
+    # Exact frequency-domain ramp with zero DC. Truncating a spatial ramp
+    # instead leaves a padding-dependent DC term and breaks the 1D/2D limit
+    # when detector height exceeds width.
+    return 2 * np.fft.rfftfreq(length)
 
 
 def filter_projection(projection, pixel_size_vu, direction_uv, n_views, filter_name="ram_lak"):
-    """Directional discrete ramp with TIGRE-compatible uniform normalization.
+    """Directional frequency ramp with physical uniform normalization.
 
     The ray sweep derivative is z_axis cross ray. Its U/V components (a,b)
     give a physical multiplier |a*f_u+b*f_v|. Its norm supplies the inclination
     factor. On the standard orbit this reduces to the existing 1D ramp with
-    scale pi/(2*N*pixel_u), including the finite discrete ramp's DC response.
+    scale pi/(2*N*pixel_u). Every branch uses the same zero-DC definition,
+    independently of the installed TIGRE filter implementation.
     The 2D case is zero-padded on both axes to avoid circular wraparound.
     """
     image = np.asarray(projection, dtype=np.float32)
@@ -87,12 +87,14 @@ def filter_projection(projection, pixel_size_vu, direction_uv, n_views, filter_n
     frequency_u = np.fft.rfftfreq(length_u, d=pitch[1])[None, :]
     frequency_v = np.fft.fftfreq(length_v, d=pitch[0])[:, None]
     directional_frequency = np.abs(unit_u * frequency_u + unit_v * frequency_v)
-    sample_pitch = max(abs(unit_u) * pitch[1], abs(unit_v) * pitch[0])
+    # Maximum directional frequency over the rectangular 2D FFT domain is
+    # |unit_u|/(2*du)+|unit_v|/(2*dv). This choice makes window support vary
+    # continuously at either detector axis, without a hard Nyquist jump.
+    sample_pitch = 1 / (abs(unit_u) / pitch[1] + abs(unit_v) / pitch[0])
     normalized = directional_frequency * sample_pitch
-    table_length = max(length_u, length_v)
-    response = np.interp(normalized, np.fft.rfftfreq(table_length), _ramp_response(table_length))
+    normalized = np.minimum(normalized, 0.5)
+    response = 2 * normalized
     response *= _filter_window(normalized, filter_name)
-    response[normalized > 0.5] = 0
     result = fft.irfft2(fft.rfft2(padded) * response, s=padded.shape)
     result = result[start_v:start_v + height, start_u:start_u + width]
     return np.asarray(result * (magnitude * np.pi / (2 * n_views * sample_pitch)), np.float32)
@@ -153,56 +155,129 @@ def require_backend(backend):
         ) from error
 
 
-def _tigre_backproject(filtered, geometry, scanner):
-    from tigre.utilities.Atb import Atb
+def _geometry_for_tigre(geometry, scanner, layout):
     from r2_gaussian.utils.ct_utils import get_geometry_tigre
 
     geo = get_geometry_tigre(scanner)
-    geo.offDetector = np.asarray(geometry["tigre_offset_uv"], dtype=np.float32)
-    geo.rotDetector = np.zeros((len(filtered), 3), dtype=np.float32)
-    geo.COR = np.zeros(len(filtered), dtype=np.float32)
-    angles = np.ascontiguousarray(geometry["tigre_angles"], dtype=np.float32)
+    # Python package sources need not match the installed compiled extension.
+    # Only the offline adapter changes encoding; world XYZ and physical U/V
+    # vectors in the saved geometry remain identical for both ABI layouts.
+    origin = np.asarray(scanner["offOrigin"], dtype=np.float32)
+    detector_offsets = np.asarray(geometry["tigre_offset_uv"], dtype=np.float32)
+    geo.offOrigin = origin if layout["off_origin_order"] == "xyz" else origin[::-1].copy()
+    geo.offDetector = (detector_offsets if layout["off_detector_order"] == "uv"
+                       else detector_offsets[:, ::-1].copy())
+    count = len(geometry["scan_angles"])
+    geo.rotDetector = np.zeros((count, 3), dtype=np.float32)
+    geo.COR = np.zeros(count, dtype=np.float32)
+    return geo
+
+
+def _tigre_backproject(filtered, geometry, scanner, layout=None):
+    from tigre.utilities.Atb import Atb
+
+    standard_orbit = np.all(geometry["beam_tilt"] == 0)
+    if layout is None:
+        probe = probe_tigre_standard_geometry if standard_orbit else probe_tigre_full_geometry
+        layout = probe()["layout"]
+    geo = _geometry_for_tigre(geometry, scanner, layout)
+    angle_values = geometry["scan_angles"] if standard_orbit else geometry["tigre_angles"]
+    angles = np.ascontiguousarray(angle_values, dtype=np.float32)
     # Angle-dependent normalization is already included in our filter. Atb is
     # an unweighted sum here, so do NOT apply TIGRE FBP's DSO/DSD again.
     result = Atb(np.ascontiguousarray(filtered[:, ::-1, :]), geo, angles)
     return np.asarray(result.transpose(2, 1, 0), dtype=np.float32)
 
 
+@lru_cache(maxsize=1)
 def probe_tigre_full_geometry():
-    """Check the INSTALLED CUDA kernel, not just acceptance of (N,3) angles."""
+    return _probe_tigre_geometry(full_pose=True)
+
+
+@lru_cache(maxsize=1)
+def probe_tigre_standard_geometry():
+    """Check ordinary 1D-angle FBP without requiring arbitrary 3D rotations."""
+    return _probe_tigre_geometry(full_pose=False)
+
+
+def _probe_tigre_geometry(full_pose):
+    """Identify offset encoding using actual coordinate-valued backprojections.
+
+    Known TIGRE builds differ in Python/CUDA XYZ versus ZYX origin encoding
+    and UV versus VU detector-offset encoding. Test all four combinations on
+    several non-cubic, offset, tilted acquisitions. U and V are checked
+    separately in PIXELS, so cancellation in a combined ramp cannot hide a
+    geometry error. The fixed tolerance includes texture interpolation's
+    1/256 fractional-coordinate quantization, not an arbitrary intensity error.
+    """
     scanner = dict(mode="parallel", DSO=5.0, DSD=10.0, nVoxel=[3, 4, 5],
                    sVoxel=[0.7, 0.8, 0.9], offOrigin=[0.01, -0.02, 0.03],
-                   nDetector=[32, 40], sDetector=[3.2, 4.0], offDetector=[0.02, -0.03],
+                   nDetector=[32, 40], sDetector=[3.2, 5.0], offDetector=[0.02, -0.03],
                    accuracy=0.5, filter=None)
-    geometry = build_geometry(scanner, [0.67], [0.12, -0.09])
     vv, uu = np.indices(scanner["nDetector"])
-    ramp = (3 + 0.2 * uu + 0.3 * vv).astype(np.float32)[None]
-    points = voxel_points(scanner, 0, int(np.prod(scanner["nVoxel"])))
-    uv = project_points(points, geometry, 0)
-    expected = (3 + 0.2 * uv[:, 0] + 0.3 * uv[:, 1]).reshape(scanner["nVoxel"])
-    actual = _tigre_backproject(ramp, geometry, scanner)
-    error = float(np.max(np.abs(actual - expected)))
-    # Hardware bilinear texture fractions are quantized; this is far smaller
-    # than the discrepancy from ignoring tilt, an offset, or flipping twice.
-    if not np.isfinite(actual).all() or error > 0.02:
-        raise RuntimeError(f"Installed TIGRE failed full-pose geometry probe (max error {error:.6g}); no partial fallback")
-    return {"status": "passed", "max_ramp_error": error, "tolerance": 0.02}
+    ramps = [uu.astype(np.float32)[None], vv.astype(np.float32)[None]]
+    cases = []
+    settings = ((0.17, [0, 0, 0], [0.02, -0.03], [0.12, -0.09]),
+                (0.67, [0.01, -0.02, 0.03], [0.02, -0.03], [0.12, -0.09]),
+                (1.31, [-0.04, 0.01, 0.02], [-0.05, 0.04], [-0.07, 0.04]))
+    for angle, origin, detector_offset, tilt in settings:
+        cfg = {**scanner, "offOrigin": origin, "offDetector": detector_offset}
+        geometry = build_geometry(cfg, [angle], tilt if full_pose else [0, 0])
+        points = voxel_points(cfg, 0, int(np.prod(cfg["nVoxel"])))
+        uv = project_points(points, geometry, 0)
+        # All reference samples must have full support: this is a coordinate
+        # probe, not a test of CUDA's partially supported border textures.
+        if np.any(uv < 1) or np.any(uv > np.asarray(cfg["nDetector"])[::-1] - 2):
+            raise RuntimeError("Internal TIGRE probe coordinates leave the detector interior")
+        cases.append((cfg, geometry, uv))
+
+    tolerance_px, gain_tolerance = 0.005, 1e-5
+    candidates = []
+    for origin_order in ("zyx", "xyz"):
+        for detector_order in ("uv", "vu"):
+            layout = {"off_origin_order": origin_order, "off_detector_order": detector_order}
+            case_errors, gain_error = [], 0.0
+            for cfg, geometry, uv in cases:
+                errors = []
+                for axis, ramp in enumerate(ramps):
+                    actual = _tigre_backproject(ramp, geometry, cfg, layout=layout)
+                    if actual.shape != tuple(cfg["nVoxel"]) or not np.isfinite(actual).all():
+                        raise RuntimeError("Installed TIGRE returned invalid geometry-probe data; no partial fallback")
+                    errors.append(float(np.max(np.abs(actual.ravel() - uv[:, axis]))))
+                constant = _tigre_backproject(np.ones_like(ramps[0]), geometry, cfg, layout=layout)
+                if not np.isfinite(constant).all():
+                    raise RuntimeError("Installed TIGRE returned non-finite probe normalization")
+                gain_error = max(gain_error, float(np.max(np.abs(constant - 1))))
+                case_errors.append({"u_px": errors[0], "v_px": errors[1]})
+            candidates.append({"layout": layout, "case_errors_px": case_errors,
+                               "max_coordinate_error_px": max(max(row.values()) for row in case_errors),
+                               "constant_gain_error": gain_error})
+    accepted = [row for row in candidates if row["max_coordinate_error_px"] <= tolerance_px
+                and row["constant_gain_error"] <= gain_tolerance]
+    if len(accepted) != 1:
+        diagnostics = "; ".join(
+            f"origin={row['layout']['off_origin_order']},detector={row['layout']['off_detector_order']}: "
+            f"{row['max_coordinate_error_px']:.6g}px,gain={row['constant_gain_error']:.6g}"
+            for row in candidates)
+        kind = "full-pose" if full_pose else "standard"
+        raise RuntimeError(f"Installed TIGRE failed {kind} geometry probe "
+                           f"({len(accepted)} valid layouts; tolerance {tolerance_px}px; {diagnostics}); no partial fallback")
+    best = accepted[0]
+    return {"status": "passed", "geometry_kind": "full_pose" if full_pose else "standard",
+            **best, "tolerance_px": tolerance_px,
+            "gain_tolerance": gain_tolerance, "candidate_scores": candidates}
 
 
 def reconstruct_standard(projections, angles, scanner, filter_name="ram_lak", backend="tigre"):
-    if backend == "cpu":
-        geometry = build_geometry(scanner, angles)
-        return backproject_cpu(filter_projections(projections, geometry, filter_name), geometry, scanner)
     require_backend(backend)
-    import tigre.algorithms as algorithms
-    from r2_gaussian.utils.ct_utils import get_geometry_tigre
-
-    # Preserve the main path's V reversal and XYZ result convention. Pass the
-    # filter explicitly: upstream FBP can overwrite geo.filter with its default.
-    result = algorithms.fbp(np.ascontiguousarray(projections[:, ::-1, :], dtype=np.float32),
-                            get_geometry_tigre(scanner), np.asarray(angles, dtype=np.float32),
-                            filter=filter_name)
-    return np.asarray(result.transpose(2, 1, 0), dtype=np.float32)
+    geometry = build_geometry(scanner, angles)
+    filtered = filter_projections(projections, geometry, filter_name)
+    if backend == "cpu":
+        return backproject_cpu(filtered, geometry, scanner)
+    # Use the SAME physical filter as full mode. Installed algs.fbp versions
+    # can ignore filter=, normalize by detector V pitch while filtering U, or
+    # choose different padding. Keep that variability out of this offline tool.
+    return _tigre_backproject(filtered, geometry, scanner)
 
 
 def reconstruct_full(projections, geometry, scanner, filter_name="ram_lak", backend="tigre"):
@@ -237,10 +312,9 @@ def backend_provenance(backend):
         return {"backend": "cpu", "reference_only": True}
     from r2_gaussian.utils.artifact_utils import file_identity
     from tigre.utilities.Atb import Atb
-    import tigre.algorithms as algorithms
 
-    result = {"backend": "tigre"}
-    for name, function in (("fbp", algorithms.fbp), ("Atb", Atb)):
+    result = {"backend": "tigre", "filter_backend": "offline_physical_frequency_ramp"}
+    for name, function in (("Atb", Atb),):
         path = inspect.getsourcefile(function)
         result[name] = file_identity(path) if path else {"source": "unavailable"}
     return result
