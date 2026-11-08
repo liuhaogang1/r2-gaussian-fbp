@@ -1,4 +1,4 @@
-# Gaussian repair 硬触发轴比实验
+# Gaussian auto 筛选值实验及强约束实验
 
 在项目的 Linux 训练环境运行。脚本仅组织已有的 `run_pipeline.py`、`train.py`、
 `test.py`，不修改训练算法或随机种子行为。输入、数据/图片输出、模型输出、采集配置
@@ -7,9 +7,10 @@
 ```bash
 bash scripts/run_shape_grid.sh \
   --input_dir /root/fnvme/data_10_8/1/cata2_8.4kev_400ms_1 \
-  --output_dir /root/fnvme/TEST_11.8/shape_repair_ratios \
-  --model_path /root/fnvme/TEST_11.8/models/shape_repair_ratios \
-  --config /root/fnvme/data_10_8/1/cata2_8.4kev_400ms_1/config.txt
+  --output_dir /root/fnvme/TEST_11.8/shape_auto_grid10 \
+  --model_path /root/fnvme/TEST_11.8/models/shape_auto_grid10 \
+  --config /root/fnvme/data_10_8/1/cata2_8.4kev_400ms_1/config.txt \
+  --experiment auto_grid
 ```
 
 两个输出根目录需要全新或为空，原有实验不会被自动复用或覆盖。默认读取项目内的
@@ -19,20 +20,37 @@ bash scripts/run_shape_grid.sh \
 
 ## 实验与执行顺序
 
-默认模式为 `--experiment repair_ratios`，直接运行三组：
+默认模式为 `--experiment auto_grid`，先运行九组参数筛选，再运行一组强约束实验。
+所有十组都是 auto，密度与质量删除条件始终同时开启，没有仅开启一个条件的消融组。
 
-| 组别 | 针状/片状软阈值 | 两个软权重 | 硬触发轴比 | 方式 |
+前九组固定针状/片状软阈值均为 10、两个软权重均为 0.05、两个硬触发轴比均为 15。
+密度阈值 `[0.01, 0.03, 0.06]` 与质量阈值 `[1e-6, 5e-6, 2e-5]` 交叉遍历：
+
+| 密度阈值 / 质量阈值 | 1e-6 | 5e-6 | 2e-5 |
+|---|---|---|---|
+| 0.01 | E01 | E02 | E03 |
+| 0.03 | E04 | E05 | E06 |
+| 0.06 | E07 | E08 | E09 |
+
+例如首组名为 `E01_H15_D0p01_M1e-06`，记录硬触发轴比 15、密度阈值 0.01、质量阈值 1e-6。
+九组结束后追加 `E10_strong_T5_L0p1_H10`：
+
+| 软阈值（针状/片状） | 两个软权重 | 硬触发轴比 | 密度阈值 | 质量阈值 |
 |---|---|---|---|---|
-| H12_repair | 10 / 10 | 0.05 / 0.05 | 12 / 12 | repair |
-| H15_repair | 10 / 10 | 0.05 / 0.05 | 15 / 15 | repair |
-| H20_repair | 10 / 10 | 0.05 / 0.05 | 20 / 20 | repair |
+| 5 / 5 | 0.1 / 0.1 | 10 / 10 | 0.06 | 2e-5 |
 
-硬触发轴比是开始离散处理的条件；修复目标仍为软阈值 10。检查间隔 100、连续检查
-次数 3、每次最多处理 32 个、密度补偿增益上限 4。两个低贡献阈值固定为 0，让所有
-进入处理队列的异常候选都走修复分支。该模式不启用形状删除分支，常规增密/剪枝照常。
+最后一组的两个删除阈值直接取前九组搜索范围的最大值，并始终排在执行序列末尾。
+清单和 CSV 用 `trial_role` 区分前九组的 `parameter_search` 与最后的 `strong_constraint`。
+脚本保存全部结果，由实验者比较参数；不会把最后的强约束组当成单因素筛选组自动选优。
+
+对持续严重异常且进入本次队列的候选，`density < density_threshold` **或**
+`mass < mass_threshold` 时删除，其余候选修复。代码中的质量代理为
+`density * sx * sy * sz * (2*pi)^1.5`，采用训练模型的归一化尺度。数值增大通常会扩大
+删除候选范围。检查间隔 100、连续检查次数 3、每次最多处理 32 个、密度补偿增益上限 4。
+修复目标使用各组软阈值，常规增密/剪枝照常。
 
 1. GPU 0 上运行一次中心估计、FBP、训练视角 FBP 初始化及 sigma=0.8 去噪。
-2. 三组训练都独立读取同一个 `shared/init/init_points.npy`，按 12、15、20 串行运行。
+2. 十组训练都独立读取同一个 `shared/init/init_points.npy`，按 E01 到 E10 串行运行。
 3. 每组调用 `test.py`，自动读取该组最终迭代的 pose 快照，导出最终 Gaussian 重建体。
 4. 全部训练结束后，按所有成功组的统一灰度范围分别出图。
 
@@ -44,8 +62,9 @@ nVoxel=256³，sVoxel=auto，offOrigin=0，DSD=7，DSO=5，accuracy=0.5，hann�
 100000 点、density_thresh=0.25、density_rescale=0.2、normalize_percentile=99.5。
 
 训练保留 pose 开启、30000 步、shape_start=500、shape_end=30000、ramp=1000、
-hard_action=repair、最多 300000 点及 seed=0。除模型路径和两个硬触发轴比参数外，
-三组训练配置相同。现有训练内部固定随机种子为 0，本脚本保持该行为。
+hard_action=auto、最多 300000 点及 seed=0。前九组除模型路径和两个删除阈值外配置相同；
+最后一组额外改变软阈值、软权重和硬触发轴比，其余设置保持一致。
+现有训练内部固定随机种子为 0，本脚本保持该行为。
 测试保留 `iteration=-1` 和 `skip_render_test`，仍执行训练投影评价与体重建。
 
 ## 输出
@@ -56,23 +75,23 @@ output_dir/
   shared/dataset/                  # 共用投影、FBP、meta_data.json
   shared/init/init_points.npy      # 共用去噪初始化点
   shared/init/denoise_report.json
-  cases/H12_repair/train_config.yml # 每组实际交给 train.py 的完整配置
+  cases/E01_H15_D0p01_M1e-06/train_config.yml # 每组实际训练配置
   logs/shared.log
-  logs/H12_repair_train.log
-  logs/H12_repair_test.log
-  images/H12_repair.png            # 每组一张 3×3 PNG，共三张
-  images/H15_repair.png
-  images/H20_repair.png
-  images/slices/H12_repair.npz     # 该组九张原始浮点切片
+  logs/E01_H15_D0p01_M1e-06_train.log
+  logs/E01_H15_D0p01_M1e-06_test.log
+  images/E01_H15_D0p01_M1e-06.png   # 每组一张 3×3 PNG，共十张
+  images/...其余八个参数组合.png
+  images/E10_strong_T5_L0p1_H10.png
+  images/slices/E01_H15_D0p01_M1e-06.npz # 该组九张原始浮点切片
   images/display_settings.json     # 共享灰度、索引、方向和对应重建体
   shape_grid_manifest.json         # 全部命令、解析参数、状态、共用输入哈希
   summary.csv
 
 model_path/
-  H12_repair/point_cloud/iteration_30000/point_cloud.pickle
-  H12_repair/test/iter_30000/vol_pred.npy
-  H12_repair/test/iter_30000/vol_pred.nii.gz
-  ...其余两组独立模型目录
+  E01_H15_D0p01_M1e-06/point_cloud/iteration_30000/point_cloud.pickle
+  E01_H15_D0p01_M1e-06/test/iter_30000/vol_pred.npy
+  E01_H15_D0p01_M1e-06/test/iter_30000/vol_pred.nii.gz
+  ...其余九组独立模型目录
 ```
 
 每张 PNG 的行依次为 X/Y/Z 法向，列依次为 25%/50%/75%。256³ 重建体取从 0 开始的
@@ -85,8 +104,9 @@ model_path/
 窗口值写入图片和 `display_settings.json`；不对单个面板自动归一化。
 
 `summary.csv` 包含运行状态、耗时、最终点数、训练投影 PSNR/SSIM、相对 FBP 的三维指标，
-以及实际硬触发轴比、针状/片状轴比 P99、超过固定参考阈值 10/12/15/20/50 的点数比例
-和积分质量代理占比。图片标题分别标记软阈值、软权重、硬触发轴比和最终迭代数。
+以及实际软阈值/权重、硬触发轴比、密度与质量删除阈值、实验类型、针状/片状轴比 P99、
+超过固定参考阈值 10/12/15/20/50 的点数比例和积分质量代理占比。
+图片标题分别标记软阈值、软权重、硬触发轴比、两个删除阈值、OR 关系和最终迭代数。
 统计会先恢复 Gaussian 尺度与密度的激活函数。因 n_test=0，表中没有留出投影指标；
 三维指标的参考是 FBP，不能视为独立真实体。
 
@@ -95,7 +115,7 @@ model_path/
 控制台打印每个阶段的命令、日志路径与每组状态。训练进度可另开终端查看：
 
 ```bash
-tail -f /your/output_dir/logs/H12_repair_train.log
+tail -f /your/output_dir/logs/E01_H15_D0p01_M1e-06_train.log
 ```
 
 预处理失败立即停止。某一训练/测试组失败时默认继续其余组；加 `--fail_fast` 可立即
@@ -106,9 +126,12 @@ tail -f /your/output_dir/logs/H12_repair_train.log
 当前脚本不执行断点续训；重新执行完整实验时须指定新的输出根目录。中断运行不能
 被视为完成结果，最终 Gaussian、最终重建体和完成状态均会检查。
 
-## 原九组软约束遍历
+## 之前的 repair 和软约束实验
+
+显式传入 `--experiment repair_ratios` 可继续运行 H12/H15/H20 三组 repair：软阈值 10、
+软权重 0.05、两个删除阈值均为 0。该模式参数与之前的三组实验一致。
 
 如需运行原来的阈值 `[5, 10, 20]` × 权重 `[0.01, 0.05, 0.1]` 九组实验，在命令末尾
 显式添加 `--experiment soft_grid`。该模式 hard_action=none，组名仍为 `T5_L0p01` 等。
-未传入该选项时默认运行上面的三组 repair 实验。`--plot_only` 按保存清单中的实际分组
-重新出图，因此已有九组结果也可以继续使用。
+未传入模式选项时默认运行本文的九组 auto 筛选加一组强约束实验。`--plot_only` 按保存
+清单中的实际分组重新出图，已有 repair、软约束遍历结果也可以继续使用。

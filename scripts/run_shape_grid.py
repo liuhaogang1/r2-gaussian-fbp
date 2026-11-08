@@ -1,8 +1,8 @@
-"""Repair axis-ratio trials with one shared preprocessing/init run.
+"""Auto-pruning threshold grid and a final strong-constraint trial.
 
 This optional wrapper calls existing pipeline/train/test implementations. It
 does not change training defaults, shape losses, or random-seed behavior.
-The previous nine-case soft grid is available with --experiment soft_grid.
+Previous repair/soft grids remain available as explicit experiment modes.
 """
 
 import argparse
@@ -31,6 +31,8 @@ from scripts.shape_grid_images import render_grid  # noqa: E402
 THRESHOLDS = (5, 10, 20)
 WEIGHTS = (0.01, 0.05, 0.1)
 HARD_RATIOS = (12, 15, 20)
+DENSITY_THRESHOLDS = (0.01, 0.03, 0.06)
+MASS_THRESHOLDS = (1e-6, 5e-6, 2e-5)
 
 
 def build_parser():
@@ -40,8 +42,8 @@ def build_parser():
     parser.add_argument("--model_path", type=Path, required=True, help="NEW root for independent models")
     parser.add_argument("--config", type=Path, required=True, help="Acquisition config.txt")
     parser.add_argument("--train_config", type=Path, default=ROOT / "configs/pose_parallel.yaml")
-    parser.add_argument("--experiment", choices=("repair_ratios", "soft_grid"), default="repair_ratios",
-                        help="Default: repair H12/H15/H20, soft thresholds=10 and weights=0.05; soft_grid restores the old nine cases")
+    parser.add_argument("--experiment", choices=("auto_grid", "repair_ratios", "soft_grid"), default="auto_grid",
+                        help="Default: nine auto density/mass combinations at H15, then one strong trial; previous grids remain available")
     parser.add_argument("--dry_run", action="store_true", help="Print the plan without writing/running anything")
     parser.add_argument("--plot_only", action="store_true", help="Recreate PNGs from this batch's completed volumes")
     parser.add_argument("--fail_fast", action="store_true", help="Stop after a failed trial; default continues")
@@ -115,25 +117,53 @@ def unbuffered(command):
     return [command[0], "-u", *command[1:]]
 
 
+def trial_specs(experiment):
+    if experiment == "repair_ratios":
+        return [dict(case=f"H{ratio}_repair", threshold=10, weight=0.05, hard_ratio=ratio,
+                     low_density_threshold=0, low_mass_threshold=0) for ratio in HARD_RATIOS]
+    if experiment == "soft_grid":
+        return [dict(case=f"T{threshold}_L{str(weight).replace('.', 'p')}", threshold=threshold,
+                     weight=weight, hard_ratio=None) for threshold in THRESHOLDS for weight in WEIGHTS]
+    if experiment != "auto_grid":
+        raise ValueError(f"Unknown experiment: {experiment}")
+    trials = []
+    for density in DENSITY_THRESHOLDS:
+        for mass in MASS_THRESHOLDS:
+            index = len(trials) + 1
+            density_tag = f"{density:g}".replace(".", "p")
+            mass_tag = f"{mass:g}".replace(".", "p")
+            trials.append(dict(
+                case=f"E{index:02d}_H15_D{density_tag}_M{mass_tag}",
+                threshold=10, weight=0.05, hard_ratio=15, trial_role="parameter_search",
+                low_density_threshold=density, low_mass_threshold=mass,
+            ))
+    # This independent trial always runs AFTER all nine parameter combinations.
+    trials.append(dict(
+        case="E10_strong_T5_L0p1_H10", threshold=5, weight=0.1, hard_ratio=10,
+        trial_role="strong_constraint", low_density_threshold=max(DENSITY_THRESHOLDS),
+        low_mass_threshold=max(MASS_THRESHOLDS),
+    ))
+    return trials
+
+
 def build_plan(args):
     options = original_options(args)
-    if args.experiment == "repair_ratios":
-        options[options.index("--train_shape_hard_action") + 1] = "repair"
+    if args.experiment in ("repair_ratios", "auto_grid"):
+        options[options.index("--train_shape_hard_action") + 1] = (
+            "auto" if args.experiment == "auto_grid" else "repair")
         for name, value in (
             ("check_interval", 100), ("patience", 3), ("max_hard_actions_per_check", 32),
             ("repair_max_density_gain", 4), ("low_density_threshold", 0), ("low_mass_threshold", 0),
         ):
             options.extend(["--train_shape_" + name, str(value)])
+        if args.experiment == "auto_grid":
+            options.extend(["--train_shape_hard_needle_ratio", "15", "--train_shape_hard_sheet_ratio", "15"])
     base = pipeline.resolve_args(pipeline.build_parser().parse_args(options))
     pipeline.validate_args(base)
     shared = [sys.executable, "-u", str(ROOT / "run_pipeline.py"), *options, "--stop_after", "init"]
     cases = []
-    if args.experiment == "repair_ratios":
-        trials = [(f"H{ratio}_repair", 10, 0.05, ratio) for ratio in HARD_RATIOS]
-    else:
-        trials = [(f"T{threshold}_L{str(weight).replace('.', 'p')}", threshold, weight, None)
-                  for threshold in THRESHOLDS for weight in WEIGHTS]
-    for name, threshold, weight, hard_ratio in trials:
+    for spec in trial_specs(args.experiment):
+        name, threshold, weight, hard_ratio = (spec[key] for key in ("case", "threshold", "weight", "hard_ratio"))
         resolved = argparse.Namespace(**vars(base))
         resolved.model_path = args.model_path / name
         resolved.train_shape_needle_threshold = threshold
@@ -143,6 +173,8 @@ def build_plan(args):
         if hard_ratio is not None:
             resolved.train_shape_hard_needle_ratio = hard_ratio
             resolved.train_shape_hard_sheet_ratio = hard_ratio
+            resolved.train_shape_low_density_threshold = spec["low_density_threshold"]
+            resolved.train_shape_low_mass_threshold = spec["low_mass_threshold"]
         pipeline.validate_args(resolved)
         config_path = args.output_dir / "cases" / name / "train_config.yml"
         final = resolved.train_iterations
@@ -159,13 +191,17 @@ def build_plan(args):
             "status": "pending", "error": "",
         }
         if hard_ratio is not None:
-            case.update(hard_ratio=hard_ratio, hard_action="repair",
+            case.update(hard_ratio=hard_ratio, hard_action=resolved.train_shape_hard_action,
                         hard_needle_ratio=hard_ratio, hard_sheet_ratio=hard_ratio,
                         shape_enabled=True, needle_enabled=True, sheet_enabled=True,
                         needle_threshold=threshold, sheet_threshold=threshold,
-                        lambda_needle=weight, lambda_sheet=weight)
+                        lambda_needle=weight, lambda_sheet=weight,
+                        low_density_threshold=resolved.train_shape_low_density_threshold,
+                        low_mass_threshold=resolved.train_shape_low_mass_threshold)
+        if "trial_role" in spec:
+            case["trial_role"] = spec["trial_role"]
         cases.append(case)
-    return {"version": 2, "experiment": args.experiment,
+    return {"version": 3, "experiment": args.experiment,
             "input_dir": str(args.input_dir), "output_dir": str(args.output_dir),
             "model_path": str(args.model_path), "shared_command": shared,
             "shared_status": "pending", "metadata_path": str(base.output_dir / "meta_data.json"),
@@ -238,7 +274,7 @@ def save_progress(args, manifest):
     atomic_json(args.output_dir / manifest.get("manifest_filename", "shape_grid_manifest.json"), manifest)
     extra = ("shape_enabled", "needle_enabled", "sheet_enabled", "needle_threshold",
              "sheet_threshold", "lambda_needle", "lambda_sheet", "hard_action", "hard_ratio",
-             "hard_needle_ratio", "hard_sheet_ratio")
+             "hard_needle_ratio", "hard_sheet_ratio", "low_density_threshold", "low_mass_threshold", "trial_role")
     extra = tuple(key for key in extra if any(key in case for case in manifest["cases"]))
     rows = [{key: case.get(key, "") for key in (
         "case", "threshold", "weight", "iteration", "status", "elapsed_seconds", "error", "volume_path", "png", *extra)}

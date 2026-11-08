@@ -1,4 +1,4 @@
-"""CPU coverage for repair trials, the legacy soft grid and XYZ montages."""
+"""CPU coverage for auto selection, repair/soft grids and XYZ montages."""
 
 import contextlib
 import io
@@ -225,15 +225,15 @@ class RepairRatioTests(unittest.TestCase):
     run_mock_batch = ShapeGridTests.run_mock_batch
 
     def args(self, *extra):
-        # Omit --experiment: this verifies the new default entry point.
         args = grid.build_parser().parse_args([
             "--input_dir", str(self.raw), "--output_dir", str(self.root / "output"),
             "--model_path", str(self.root / "models"), "--config", str(self.raw / "config.txt"),
+            "--experiment", "repair_ratios",
             *extra,
         ])
         return args
 
-    def test_default_trials_vary_only_hard_trigger_and_model_path(self):
+    def test_repair_trials_vary_only_hard_trigger_and_model_path(self):
         args = self.args()
         grid.validate_args(args)
         plan = grid.build_plan(args)
@@ -311,6 +311,137 @@ class RepairRatioTests(unittest.TestCase):
             self.assertEqual(grid.main(self.args("--plot_only")), 0)
         run.assert_not_called()
         self.assertEqual(len(self.plotted), 3)
+
+
+class AutoGridTests(unittest.TestCase):
+    setUp = ShapeGridTests.setUp
+    fake_process = ShapeGridTests.fake_process
+    fake_render = ShapeGridTests.fake_render
+    run_mock_batch = ShapeGridTests.run_mock_batch
+
+    def args(self, *extra):
+        # No explicit mode: auto_grid is now the normal batch entry point.
+        return grid.build_parser().parse_args([
+            "--input_dir", str(self.raw), "--output_dir", str(self.root / "output"),
+            "--model_path", str(self.root / "models"), "--config", str(self.raw / "config.txt"),
+            *extra,
+        ])
+
+    def test_default_plan_contains_nine_positive_filter_pairs_then_strong_trial(self):
+        args = self.args()
+        grid.validate_args(args)
+        plan = grid.build_plan(args)
+        self.assertEqual(plan["experiment"], "auto_grid")
+        self.assertEqual(len(plan["cases"]), 10)
+        self.assertEqual(len({c["case"] for c in plan["cases"]}), 10)
+        expected_pairs = [(d, m) for d in (0.01, 0.03, 0.06) for m in (1e-6, 5e-6, 2e-5)]
+        self.assertEqual([(c["low_density_threshold"], c["low_mass_threshold"]) for c in plan["cases"][:9]],
+                         expected_pairs)
+        reference = None
+        for case in plan["cases"]:
+            values = case["resolved_arguments"]
+            self.assertTrue(case["low_density_threshold"] > 0)
+            self.assertTrue(case["low_mass_threshold"] > 0)
+            for key, value in {
+                "train_shape_hard_action": "auto", "train_shape_enabled": True,
+                "train_shape_needle_enabled": True, "train_shape_sheet_enabled": True,
+                "train_shape_check_interval": 100, "train_shape_patience": 3,
+                "train_shape_max_hard_actions_per_check": 32, "train_shape_repair_max_density_gain": 4,
+                "train_shape_start_iter": 500, "train_shape_end_iter": 30000,
+                "train_shape_ramp_iters": 1000, "train_iterations": 30000,
+                "train_max_num_gaussians": 300000, "train_pose_enabled": True,
+            }.items():
+                self.assertEqual(values[key], value, key)
+            cmd = case["train_command"]
+            self.assertEqual(cmd[cmd.index("--shape_hard_action") + 1], "auto")
+            self.assertEqual(float(cmd[cmd.index("--shape_low_density_threshold") + 1]), case["low_density_threshold"])
+            self.assertEqual(float(cmd[cmd.index("--shape_low_mass_threshold") + 1]), case["low_mass_threshold"])
+            self.assertEqual(cmd[cmd.index("--ply_path") + 1], plan["init_path"])
+            if case["trial_role"] == "parameter_search":
+                for key, value in {"train_shape_needle_threshold": 10, "train_shape_sheet_threshold": 10,
+                                   "train_lambda_shape_needle": 0.05, "train_lambda_shape_sheet": 0.05,
+                                   "train_shape_hard_needle_ratio": 15, "train_shape_hard_sheet_ratio": 15}.items():
+                    self.assertEqual(values[key], value, key)
+                fixed = {k: v for k, v in values.items() if k not in {
+                    "model_path", "train_shape_low_density_threshold", "train_shape_low_mass_threshold"}}
+                if reference is None:
+                    reference = fixed
+                self.assertEqual(fixed, reference)
+        strong = plan["cases"][-1]
+        self.assertEqual(strong["case"], "E10_strong_T5_L0p1_H10")
+        self.assertEqual(strong["trial_role"], "strong_constraint")
+        values = strong["resolved_arguments"]
+        for key, value in {"train_shape_needle_threshold": 5, "train_shape_sheet_threshold": 5,
+                           "train_lambda_shape_needle": 0.1, "train_lambda_shape_sheet": 0.1,
+                           "train_shape_hard_needle_ratio": 10, "train_shape_hard_sheet_ratio": 10,
+                           "train_shape_low_density_threshold": 0.06, "train_shape_low_mass_threshold": 2e-5}.items():
+            self.assertEqual(values[key], value, key)
+        # The only additional differences in the final trial are intentional.
+        excluded = {"model_path", "train_shape_needle_threshold", "train_shape_sheet_threshold",
+                    "train_lambda_shape_needle", "train_lambda_shape_sheet",
+                    "train_shape_hard_needle_ratio", "train_shape_hard_sheet_ratio",
+                    "train_shape_low_density_threshold", "train_shape_low_mass_threshold"}
+        self.assertEqual({k: v for k, v in values.items() if k not in excluded},
+                         {k: v for k, v in plan["cases"][0]["resolved_arguments"].items() if k not in excluded})
+
+    def test_ten_independent_train_test_pairs_share_init_and_run_strong_last(self):
+        code, manifest = self.run_mock_batch()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.scripts.count("run_pipeline.py"), 1)
+        self.assertEqual(self.scripts.count("train.py"), 10)
+        self.assertEqual(self.scripts.count("test.py"), 10)
+        self.assertEqual(len(self.plotted), 10)
+        self.assertEqual(manifest["plot_status"], "completed")
+        self.assertEqual(len({cfg["ply_path"] for cfg in self.configs}), 1)
+        for cfg, case in zip(self.configs, manifest["cases"]):
+            self.assertEqual(Path(cfg["model_path"]).name, case["case"])
+            self.assertEqual(cfg["shape_hard_action"], "auto")
+            self.assertEqual(cfg["shape_needle_threshold"], case["needle_threshold"])
+            self.assertEqual(cfg["shape_sheet_threshold"], case["sheet_threshold"])
+            self.assertEqual(cfg["shape_low_density_threshold"], case["low_density_threshold"])
+            self.assertEqual(cfg["shape_low_mass_threshold"], case["low_mass_threshold"])
+        self.assertEqual(self.configs[-1]["shape_hard_needle_ratio"], 10)
+        self.assertEqual(self.configs[-1]["lambda_shape_sheet"], 0.1)
+        with (self.root / "output/summary.csv").open(encoding="utf-8-sig") as stream:
+            import csv
+            rows = list(csv.DictReader(stream))
+        self.assertEqual(len(rows), 10)
+        self.assertTrue(all(float(row["low_density_threshold"]) > 0 for row in rows))
+        self.assertTrue(all(float(row["low_mass_threshold"]) > 0 for row in rows))
+        self.assertEqual(rows[-1]["trial_role"], "strong_constraint")
+        self.assertEqual(float(rows[-1]["low_mass_threshold"]), 2e-5)
+
+    def test_failed_search_case_does_not_block_the_last_strong_trial(self):
+        code, manifest = self.run_mock_batch("E05_H15_D0p03_M5e-06")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.scripts.count("train.py"), 10)
+        self.assertEqual(self.scripts.count("test.py"), 9)
+        self.assertEqual(len(self.plotted), 9)
+        self.assertEqual(self.plotted[-1]["case"], "E10_strong_T5_L0p1_H10")
+        self.assertEqual(manifest["plot_status"], "partial")
+
+    def test_dry_run_lists_ten_cases_and_creates_no_outputs(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch.object(grid, "run_logged") as run:
+            self.assertEqual(grid.main(self.args("--dry_run")), 0)
+        run.assert_not_called()
+        self.assertFalse((self.root / "output").exists())
+        self.assertFalse((self.root / "models").exists())
+        self.assertIn("10 cases", output.getvalue())
+        self.assertIn("E10_strong_T5_L0p1_H10", output.getvalue())
+
+    def test_plot_only_uses_saved_ten_case_parameters_without_launching_training(self):
+        code, _ = self.run_mock_batch()
+        self.assertEqual(code, 0)
+        (self.raw / "config.txt").unlink()
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(grid, "run_logged") as run, \
+                mock.patch.object(grid, "render_grid", side_effect=self.fake_render):
+            self.assertEqual(grid.main(self.args("--plot_only")), 0)
+        run.assert_not_called()
+        self.assertEqual(len(self.plotted), 10)
+        self.assertEqual(self.plotted[-1]["hard_ratio"], 10)
+        self.assertEqual(self.plotted[-1]["low_mass_threshold"], 2e-5)
 
 
 class ShapeGridImageTests(unittest.TestCase):
@@ -394,6 +525,37 @@ class ShapeGridImageTests(unittest.TestCase):
             self.assertIn("lambda needle/sheet = 0.05/0.05", titles[0])
             self.assertIn("hard trigger needle/sheet = 15/15", titles[0])
             self.assertIn("hard action = repair", titles[0])
+            with np.load(report["slices"]) as slices:
+                self.assertEqual(len(slices.files), 9)
+            self.assertTrue(Path(report["png"]).is_file())
+
+    def test_strong_auto_image_labels_both_filter_thresholds_and_all_shape_values(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        from matplotlib.figure import Figure
+        with tempfile.TemporaryDirectory(prefix="strong_auto_montage_") as temporary:
+            root = Path(temporary)
+            path = root / "volume.npy"
+            np.save(path, np.arange(192, dtype=np.float32).reshape(4, 6, 8))
+            case = dict(case="E10_strong_T5_L0p1_H10", iteration=30000, volume_path=str(path), hard_ratio=10,
+                        hard_action="auto", hard_needle_ratio=10, hard_sheet_ratio=10,
+                        needle_threshold=5, sheet_threshold=5, lambda_needle=0.1, lambda_sheet=0.1,
+                        low_density_threshold=0.06, low_mass_threshold=2e-5)
+            original = Figure.suptitle
+            titles = []
+
+            def capture(fig, title, *args, **kwargs):
+                titles.append(title)
+                return original(fig, title, *args, **kwargs)
+
+            with mock.patch.object(Figure, "suptitle", new=capture):
+                report = images.render_case(case, {"sVoxel": [4, 12, 24]}, root / "images",
+                                            (0, 191), (4, 6, 8))
+            self.assertIn("soft threshold needle/sheet = 5/5", titles[0])
+            self.assertIn("lambda needle/sheet = 0.1/0.1", titles[0])
+            self.assertIn("hard trigger needle/sheet = 10/10", titles[0])
+            self.assertIn("hard action = auto", titles[0])
+            self.assertIn("density < 0.06 OR mass < 2e-05", titles[0])
             with np.load(report["slices"]) as slices:
                 self.assertEqual(len(slices.files), 9)
             self.assertTrue(Path(report["png"]).is_file())

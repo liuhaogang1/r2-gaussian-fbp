@@ -97,6 +97,9 @@ def render_case(case, scanner, output_dir, window, expected_shape):
                 f"lambda needle/sheet = {case['lambda_needle']:g}/{case['lambda_sheet']:g}\n"
                 f"hard trigger needle/sheet = {case['hard_needle_ratio']:g}/{case['hard_sheet_ratio']:g}\n"
             )
+            if case["hard_action"] == "auto" and "low_density_threshold" in case and "low_mass_threshold" in case:
+                header += (f"prune if density < {case['low_density_threshold']:g} OR "
+                           f"mass < {case['low_mass_threshold']:g}\n")
         elif "needle_threshold" in case:
             header = (
                 f"{case['case']} | shape enabled = {case['shape_enabled']} | hard action = {case['hard_action']}\n"
