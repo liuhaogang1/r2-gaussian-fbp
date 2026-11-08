@@ -1,7 +1,8 @@
-"""Nine shape-threshold/weight trials with one shared preprocessing/init run.
+"""Repair axis-ratio trials with one shared preprocessing/init run.
 
 This optional wrapper calls existing pipeline/train/test implementations. It
 does not change training defaults, shape losses, or random-seed behavior.
+The previous nine-case soft grid is available with --experiment soft_grid.
 """
 
 import argparse
@@ -29,15 +30,18 @@ from scripts.shape_grid_images import render_grid  # noqa: E402
 
 THRESHOLDS = (5, 10, 20)
 WEIGHTS = (0.01, 0.05, 0.1)
+HARD_RATIOS = (12, 15, 20)
 
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--input_dir", type=Path, required=True, help="Raw Tomo/Flat TIFF directory")
     parser.add_argument("--output_dir", type=Path, required=True, help="NEW shared data/log/image root")
-    parser.add_argument("--model_path", type=Path, required=True, help="NEW root for nine separate models")
+    parser.add_argument("--model_path", type=Path, required=True, help="NEW root for independent models")
     parser.add_argument("--config", type=Path, required=True, help="Acquisition config.txt")
     parser.add_argument("--train_config", type=Path, default=ROOT / "configs/pose_parallel.yaml")
+    parser.add_argument("--experiment", choices=("repair_ratios", "soft_grid"), default="repair_ratios",
+                        help="Default: repair H12/H15/H20, soft thresholds=10 and weights=0.05; soft_grid restores the old nine cases")
     parser.add_argument("--dry_run", action="store_true", help="Print the plan without writing/running anything")
     parser.add_argument("--plot_only", action="store_true", help="Recreate PNGs from this batch's completed volumes")
     parser.add_argument("--fail_fast", action="store_true", help="Stop after a failed trial; default continues")
@@ -113,34 +117,56 @@ def unbuffered(command):
 
 def build_plan(args):
     options = original_options(args)
+    if args.experiment == "repair_ratios":
+        options[options.index("--train_shape_hard_action") + 1] = "repair"
+        for name, value in (
+            ("check_interval", 100), ("patience", 3), ("max_hard_actions_per_check", 32),
+            ("repair_max_density_gain", 4), ("low_density_threshold", 0), ("low_mass_threshold", 0),
+        ):
+            options.extend(["--train_shape_" + name, str(value)])
     base = pipeline.resolve_args(pipeline.build_parser().parse_args(options))
     pipeline.validate_args(base)
     shared = [sys.executable, "-u", str(ROOT / "run_pipeline.py"), *options, "--stop_after", "init"]
     cases = []
-    for threshold in THRESHOLDS:
-        for weight in WEIGHTS:
-            name = f"T{threshold}_L{str(weight).replace('.', 'p')}"
-            resolved = argparse.Namespace(**vars(base))
-            resolved.model_path = args.model_path / name
-            resolved.train_shape_needle_threshold = threshold
-            resolved.train_shape_sheet_threshold = threshold
-            resolved.train_lambda_shape_needle = weight
-            resolved.train_lambda_shape_sheet = weight
-            config_path = args.output_dir / "cases" / name / "train_config.yml"
-            final = resolved.train_iterations
-            test_path = resolved.model_path / "test" / f"iter_{final}"
-            cases.append({
-                "case": name, "threshold": threshold, "weight": weight, "iteration": final,
-                "model_path": str(resolved.model_path), "config_path": str(config_path),
-                "volume_path": str(test_path / "vol_pred.npy"),
-                "pickle_path": str(resolved.model_path / "point_cloud" / f"iteration_{final}" / "point_cloud.pickle"),
-                "train_command": unbuffered(pipeline.build_train_command(resolved, base.init_output, config_path)),
-                # test.py automatically binds the matching final pose snapshot.
-                "test_command": unbuffered(pipeline.build_test_command(resolved, None)),
-                "resolved_arguments": pipeline._jsonable(vars(resolved)),
-                "status": "pending", "error": "",
-            })
-    return {"version": 1, "input_dir": str(args.input_dir), "output_dir": str(args.output_dir),
+    if args.experiment == "repair_ratios":
+        trials = [(f"H{ratio}_repair", 10, 0.05, ratio) for ratio in HARD_RATIOS]
+    else:
+        trials = [(f"T{threshold}_L{str(weight).replace('.', 'p')}", threshold, weight, None)
+                  for threshold in THRESHOLDS for weight in WEIGHTS]
+    for name, threshold, weight, hard_ratio in trials:
+        resolved = argparse.Namespace(**vars(base))
+        resolved.model_path = args.model_path / name
+        resolved.train_shape_needle_threshold = threshold
+        resolved.train_shape_sheet_threshold = threshold
+        resolved.train_lambda_shape_needle = weight
+        resolved.train_lambda_shape_sheet = weight
+        if hard_ratio is not None:
+            resolved.train_shape_hard_needle_ratio = hard_ratio
+            resolved.train_shape_hard_sheet_ratio = hard_ratio
+        pipeline.validate_args(resolved)
+        config_path = args.output_dir / "cases" / name / "train_config.yml"
+        final = resolved.train_iterations
+        test_path = resolved.model_path / "test" / f"iter_{final}"
+        case = {
+            "case": name, "threshold": threshold, "weight": weight, "iteration": final,
+            "model_path": str(resolved.model_path), "config_path": str(config_path),
+            "volume_path": str(test_path / "vol_pred.npy"),
+            "pickle_path": str(resolved.model_path / "point_cloud" / f"iteration_{final}" / "point_cloud.pickle"),
+            "train_command": unbuffered(pipeline.build_train_command(resolved, base.init_output, config_path)),
+            # test.py automatically binds the matching final pose snapshot.
+            "test_command": unbuffered(pipeline.build_test_command(resolved, None)),
+            "resolved_arguments": pipeline._jsonable(vars(resolved)),
+            "status": "pending", "error": "",
+        }
+        if hard_ratio is not None:
+            case.update(hard_ratio=hard_ratio, hard_action="repair",
+                        hard_needle_ratio=hard_ratio, hard_sheet_ratio=hard_ratio,
+                        shape_enabled=True, needle_enabled=True, sheet_enabled=True,
+                        needle_threshold=threshold, sheet_threshold=threshold,
+                        lambda_needle=weight, lambda_sheet=weight)
+        cases.append(case)
+    return {"version": 2, "experiment": args.experiment,
+            "input_dir": str(args.input_dir), "output_dir": str(args.output_dir),
             "model_path": str(args.model_path), "shared_command": shared,
             "shared_status": "pending", "metadata_path": str(base.output_dir / "meta_data.json"),
             "init_path": str(base.init_output), "environment": {
@@ -180,7 +206,7 @@ def shape_statistics(path):
     stats = {"num_gaussians": len(scales)}
     for name, ratio in ratios.items():
         stats[f"{name}_p99"] = float(np.quantile(ratio, 0.99))
-        for limit in (10, 50):
+        for limit in (10, 12, 15, 20, 50):
             mask = ratio > limit
             stats[f"{name}_gt{limit}_fraction"] = float(mask.mean())
             stats[f"{name}_gt{limit}_mass_fraction"] = float(mass[mask].sum() / mass.sum()) if mass.sum() > 0 else 0.0
@@ -211,7 +237,8 @@ def collect_metrics(case):
 def save_progress(args, manifest):
     atomic_json(args.output_dir / manifest.get("manifest_filename", "shape_grid_manifest.json"), manifest)
     extra = ("shape_enabled", "needle_enabled", "sheet_enabled", "needle_threshold",
-             "sheet_threshold", "lambda_needle", "lambda_sheet", "hard_action")
+             "sheet_threshold", "lambda_needle", "lambda_sheet", "hard_action", "hard_ratio",
+             "hard_needle_ratio", "hard_sheet_ratio")
     extra = tuple(key for key in extra if any(key in case for case in manifest["cases"]))
     rows = [{key: case.get(key, "") for key in (
         "case", "threshold", "weight", "iteration", "status", "elapsed_seconds", "error", "volume_path", "png", *extra)}

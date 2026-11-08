@@ -110,11 +110,12 @@ python train.py -s /path/to/dataset -m /path/to/model \
 `shape_low_density_threshold` 或 `shape_low_mass_threshold` 设置至少一个正阈值，
 否则不会因低贡献条件删除 Gaussian。拆分模式受 `max_num_gaussians` 限制。
 
-阈值 `[5, 10, 20]` × 权重 `[0.01, 0.05, 0.1]` 的九组实验可使用
-`bash scripts/run_shape_grid.sh --input_dir ... --output_dir ... --model_path ... --config ...`。
-九组共用一次预处理和去噪初始化，每组生成一张包含 X/Y/Z 三方向 25%/50%/75% 切片的
-3×3 PNG，所有组共享灰度范围。完整参数、输出及重新出图方式见
-[九组形状遍历说明](scripts/run_shape_grid.md)。
+`bash scripts/run_shape_grid.sh --input_dir ... --output_dir ... --model_path ... --config ...`
+默认在软阈值 10、软权重 0.05 下运行硬触发轴比 12/15/20 的三组 repair 实验。
+共用一次预处理和去噪初始化，每组生成一张包含 X/Y/Z 三方向 25%/50%/75% 切片的
+3×3 PNG，所有组共享灰度范围。显式添加 `--experiment soft_grid` 可运行原阈值
+`[5, 10, 20]` × 权重 `[0.01, 0.05, 0.1]` 九组软约束遍历。详细说明见
+[形状 repair 轴比实验](scripts/run_shape_grid.md)。
 
 六组形状消融使用 `bash scripts/run_shape_ablation.sh`，须显式传入针状/片状阈值、
 两个损失权重及输入/输出路径；支持核验并复用已有九组实验的数据集与去噪初始化点。

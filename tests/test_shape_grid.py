@@ -1,4 +1,4 @@
-"""CPU coverage for the nine-case wrapper, failure handling and XYZ montages."""
+"""CPU coverage for repair trials, the legacy soft grid and XYZ montages."""
 
 import contextlib
 import io
@@ -37,6 +37,7 @@ class ShapeGridTests(unittest.TestCase):
         return grid.build_parser().parse_args([
             "--input_dir", str(self.raw), "--output_dir", str(self.root / "output"),
             "--model_path", str(self.root / "models"), "--config", str(self.raw / "config.txt"),
+            "--experiment", "soft_grid",
             *extra,
         ])
 
@@ -217,6 +218,101 @@ class ShapeGridTests(unittest.TestCase):
         self.assertAlmostEqual(stats["needle_gt10_mass_fraction"], 60 / 660)
 
 
+class RepairRatioTests(unittest.TestCase):
+    setUp = ShapeGridTests.setUp
+    fake_process = ShapeGridTests.fake_process
+    fake_render = ShapeGridTests.fake_render
+    run_mock_batch = ShapeGridTests.run_mock_batch
+
+    def args(self, *extra):
+        # Omit --experiment: this verifies the new default entry point.
+        args = grid.build_parser().parse_args([
+            "--input_dir", str(self.raw), "--output_dir", str(self.root / "output"),
+            "--model_path", str(self.root / "models"), "--config", str(self.raw / "config.txt"),
+            *extra,
+        ])
+        return args
+
+    def test_default_trials_vary_only_hard_trigger_and_model_path(self):
+        args = self.args()
+        grid.validate_args(args)
+        plan = grid.build_plan(args)
+        self.assertEqual(plan["experiment"], "repair_ratios")
+        self.assertEqual([c["case"] for c in plan["cases"]], ["H12_repair", "H15_repair", "H20_repair"])
+        reference = None
+        for case, ratio in zip(plan["cases"], (12, 15, 20)):
+            values = case["resolved_arguments"]
+            expected = {
+                "train_shape_needle_threshold": 10, "train_shape_sheet_threshold": 10,
+                "train_lambda_shape_needle": 0.05, "train_lambda_shape_sheet": 0.05,
+                "train_shape_hard_action": "repair", "train_shape_hard_needle_ratio": ratio,
+                "train_shape_hard_sheet_ratio": ratio, "train_shape_low_density_threshold": 0,
+                "train_shape_low_mass_threshold": 0, "train_shape_check_interval": 100,
+                "train_shape_patience": 3, "train_shape_max_hard_actions_per_check": 32,
+                "train_shape_repair_max_density_gain": 4, "train_shape_enabled": True,
+                "train_shape_needle_enabled": True, "train_shape_sheet_enabled": True,
+                "train_shape_start_iter": 500, "train_shape_end_iter": 30000,
+                "train_shape_ramp_iters": 1000, "train_iterations": 30000,
+                "train_max_num_gaussians": 300000, "train_pose_enabled": True,
+            }
+            for key, value in expected.items():
+                self.assertEqual(values[key], value, key)
+            command = case["train_command"]
+            self.assertEqual(command[command.index("--shape_hard_action") + 1], "repair")
+            self.assertEqual(command[command.index("--shape_hard_needle_ratio") + 1], str(ratio))
+            self.assertEqual(command[command.index("--shape_hard_sheet_ratio") + 1], str(ratio))
+            self.assertEqual(command[command.index("--ply_path") + 1], plan["init_path"])
+            fixed = {k: v for k, v in values.items() if k not in {
+                "model_path", "train_shape_hard_needle_ratio", "train_shape_hard_sheet_ratio"}}
+            if reference is None:
+                reference = fixed
+            self.assertEqual(fixed, reference)
+
+    def test_three_trials_share_preparation_and_write_actual_yaml_and_summary(self):
+        code, manifest = self.run_mock_batch()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.scripts.count("run_pipeline.py"), 1)
+        self.assertEqual(self.scripts.count("train.py"), 3)
+        self.assertEqual(self.scripts.count("test.py"), 3)
+        self.assertEqual(len(self.plotted), 3)
+        self.assertEqual(manifest["plot_status"], "completed")
+        self.assertEqual(len({cfg["ply_path"] for cfg in self.configs}), 1)
+        for cfg, ratio in zip(self.configs, (12, 15, 20)):
+            self.assertEqual(cfg["shape_hard_action"], "repair")
+            self.assertEqual(cfg["shape_hard_needle_ratio"], ratio)
+            self.assertEqual(cfg["shape_hard_sheet_ratio"], ratio)
+            self.assertEqual(cfg["shape_needle_threshold"], 10)
+            self.assertEqual(cfg["lambda_shape_needle"], 0.05)
+            self.assertEqual(cfg["shape_low_density_threshold"], 0)
+            self.assertEqual(cfg["shape_low_mass_threshold"], 0)
+        with (self.root / "output/summary.csv").open(encoding="utf-8-sig") as stream:
+            import csv
+            rows = list(csv.DictReader(stream))
+        self.assertEqual([row["hard_ratio"] for row in rows], ["12", "15", "20"])
+        self.assertIn("needle_gt12_fraction", rows[0])
+        self.assertIn("sheet_gt15_fraction", rows[0])
+        self.assertIn("needle_gt20_mass_fraction", rows[0])
+
+    def test_failed_repair_trial_does_not_block_remaining_trial(self):
+        code, manifest = self.run_mock_batch("H15_repair")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.scripts.count("train.py"), 3)
+        self.assertEqual(self.scripts.count("test.py"), 2)
+        self.assertEqual([c["case"] for c in self.plotted], ["H12_repair", "H20_repair"])
+        self.assertEqual(manifest["plot_status"], "partial")
+
+    def test_plot_only_retains_three_saved_trials_without_launching_processes(self):
+        code, _ = self.run_mock_batch()
+        self.assertEqual(code, 0)
+        (self.raw / "config.txt").unlink()
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(grid, "run_logged") as run, \
+                mock.patch.object(grid, "render_grid", side_effect=self.fake_render):
+            self.assertEqual(grid.main(self.args("--plot_only")), 0)
+        run.assert_not_called()
+        self.assertEqual(len(self.plotted), 3)
+
+
 class ShapeGridImageTests(unittest.TestCase):
     def test_nine_panels_have_correct_axes_indices_and_shared_window(self):
         import matplotlib
@@ -272,6 +368,35 @@ class ShapeGridImageTests(unittest.TestCase):
             np.save(path, values)
             with self.assertRaisesRegex(ValueError, "Nonfinite"):
                 images.load_volume(path)
+
+    def test_repair_image_labels_distinguish_hard_trigger_from_soft_target(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        from matplotlib.figure import Figure
+        with tempfile.TemporaryDirectory(prefix="repair_montage_") as temporary:
+            root = Path(temporary)
+            path = root / "volume.npy"
+            np.save(path, np.arange(192, dtype=np.float32).reshape(4, 6, 8))
+            case = dict(case="H15_repair", iteration=30000, volume_path=str(path), hard_ratio=15,
+                        hard_action="repair", hard_needle_ratio=15, hard_sheet_ratio=15,
+                        needle_threshold=10, sheet_threshold=10, lambda_needle=0.05, lambda_sheet=0.05)
+            original = Figure.suptitle
+            titles = []
+
+            def capture(fig, title, *args, **kwargs):
+                titles.append(title)
+                return original(fig, title, *args, **kwargs)
+
+            with mock.patch.object(Figure, "suptitle", new=capture):
+                report = images.render_case(case, {"sVoxel": [4, 12, 24]}, root / "images",
+                                            (0, 191), (4, 6, 8))
+            self.assertIn("soft threshold needle/sheet = 10/10", titles[0])
+            self.assertIn("lambda needle/sheet = 0.05/0.05", titles[0])
+            self.assertIn("hard trigger needle/sheet = 15/15", titles[0])
+            self.assertIn("hard action = repair", titles[0])
+            with np.load(report["slices"]) as slices:
+                self.assertEqual(len(slices.files), 9)
+            self.assertTrue(Path(report["png"]).is_file())
 
 
 if __name__ == "__main__":

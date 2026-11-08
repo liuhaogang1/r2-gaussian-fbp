@@ -1,4 +1,4 @@
-# Gaussian 形状阈值 × 权重九组遍历
+# Gaussian repair 硬触发轴比实验
 
 在项目的 Linux 训练环境运行。脚本仅组织已有的 `run_pipeline.py`、`train.py`、
 `test.py`，不修改训练算法或随机种子行为。输入、数据/图片输出、模型输出、采集配置
@@ -7,8 +7,8 @@
 ```bash
 bash scripts/run_shape_grid.sh \
   --input_dir /root/fnvme/data_10_8/1/cata2_8.4kev_400ms_1 \
-  --output_dir /root/fnvme/TEST_11.3/shape_grid/data_1_cata2_40nm_1_denoise08 \
-  --model_path /root/fnvme/TEST_11.3/models/shape_grid_data_1_cata2_40nm_1_denoise08 \
+  --output_dir /root/fnvme/TEST_11.8/shape_repair_ratios \
+  --model_path /root/fnvme/TEST_11.8/models/shape_repair_ratios \
   --config /root/fnvme/data_10_8/1/cata2_8.4kev_400ms_1/config.txt
 ```
 
@@ -19,11 +19,20 @@ bash scripts/run_shape_grid.sh \
 
 ## 实验与执行顺序
 
-阈值 `[5, 10, 20]` 和权重 `[0.01, 0.05, 0.1]` 交叉遍历。每组针状/片状使用同一
-阈值和同一权重。例如 `T10_L0p05` 表示两个阈值均为 10、两个 lambda 均为 0.05。
+默认模式为 `--experiment repair_ratios`，直接运行三组：
+
+| 组别 | 针状/片状软阈值 | 两个软权重 | 硬触发轴比 | 方式 |
+|---|---|---|---|---|
+| H12_repair | 10 / 10 | 0.05 / 0.05 | 12 / 12 | repair |
+| H15_repair | 10 / 10 | 0.05 / 0.05 | 15 / 15 | repair |
+| H20_repair | 10 / 10 | 0.05 / 0.05 | 20 / 20 | repair |
+
+硬触发轴比是开始离散处理的条件；修复目标仍为软阈值 10。检查间隔 100、连续检查
+次数 3、每次最多处理 32 个、密度补偿增益上限 4。两个低贡献阈值固定为 0，让所有
+进入处理队列的异常候选都走修复分支。该模式不启用形状删除分支，常规增密/剪枝照常。
 
 1. GPU 0 上运行一次中心估计、FBP、训练视角 FBP 初始化及 sigma=0.8 去噪。
-2. 九组训练都独立读取同一个 `shared/init/init_points.npy`，按阈值、权重顺序串行运行。
+2. 三组训练都独立读取同一个 `shared/init/init_points.npy`，按 12、15、20 串行运行。
 3. 每组调用 `test.py`，自动读取该组最终迭代的 pose 快照，导出最终 Gaussian 重建体。
 4. 全部训练结束后，按所有成功组的统一灰度范围分别出图。
 
@@ -35,8 +44,8 @@ nVoxel=256³，sVoxel=auto，offOrigin=0，DSD=7，DSO=5，accuracy=0.5，hann�
 100000 点、density_thresh=0.25、density_rescale=0.2、normalize_percentile=99.5。
 
 训练保留 pose 开启、30000 步、shape_start=500、shape_end=30000、ramp=1000、
-hard_action=none、最多 300000 点及 seed=0。除模型路径和四个形状阈值/权重参数外，
-九组训练配置相同。现有训练内部固定随机种子为 0，本脚本保持该行为。
+hard_action=repair、最多 300000 点及 seed=0。除模型路径和两个硬触发轴比参数外，
+三组训练配置相同。现有训练内部固定随机种子为 0，本脚本保持该行为。
 测试保留 `iteration=-1` 和 `skip_render_test`，仍执行训练投影评价与体重建。
 
 ## 输出
@@ -47,22 +56,23 @@ output_dir/
   shared/dataset/                  # 共用投影、FBP、meta_data.json
   shared/init/init_points.npy      # 共用去噪初始化点
   shared/init/denoise_report.json
-  cases/T5_L0p01/train_config.yml  # 每组实际交给 train.py 的完整配置
+  cases/H12_repair/train_config.yml # 每组实际交给 train.py 的完整配置
   logs/shared.log
-  logs/T5_L0p01_train.log
-  logs/T5_L0p01_test.log
-  images/T5_L0p01.png              # 每组一张 3×3 PNG，共九张
-  images/...其余八组.png
-  images/slices/T5_L0p01.npz       # 该组九张原始浮点切片
+  logs/H12_repair_train.log
+  logs/H12_repair_test.log
+  images/H12_repair.png            # 每组一张 3×3 PNG，共三张
+  images/H15_repair.png
+  images/H20_repair.png
+  images/slices/H12_repair.npz     # 该组九张原始浮点切片
   images/display_settings.json     # 共享灰度、索引、方向和对应重建体
   shape_grid_manifest.json         # 全部命令、解析参数、状态、共用输入哈希
   summary.csv
 
 model_path/
-  T5_L0p01/point_cloud/iteration_30000/point_cloud.pickle
-  T5_L0p01/test/iter_30000/vol_pred.npy
-  T5_L0p01/test/iter_30000/vol_pred.nii.gz
-  ...其余八组独立模型目录
+  H12_repair/point_cloud/iteration_30000/point_cloud.pickle
+  H12_repair/test/iter_30000/vol_pred.npy
+  H12_repair/test/iter_30000/vol_pred.nii.gz
+  ...其余两组独立模型目录
 ```
 
 每张 PNG 的行依次为 X/Y/Z 法向，列依次为 25%/50%/75%。256³ 重建体取从 0 开始的
@@ -75,7 +85,8 @@ model_path/
 窗口值写入图片和 `display_settings.json`；不对单个面板自动归一化。
 
 `summary.csv` 包含运行状态、耗时、最终点数、训练投影 PSNR/SSIM、相对 FBP 的三维指标，
-以及针状/片状轴比 P99、超过固定参考阈值 10/50 的点数比例和积分质量代理占比。
+以及实际硬触发轴比、针状/片状轴比 P99、超过固定参考阈值 10/12/15/20/50 的点数比例
+和积分质量代理占比。图片标题分别标记软阈值、软权重、硬触发轴比和最终迭代数。
 统计会先恢复 Gaussian 尺度与密度的激活函数。因 n_test=0，表中没有留出投影指标；
 三维指标的参考是 FBP，不能视为独立真实体。
 
@@ -84,7 +95,7 @@ model_path/
 控制台打印每个阶段的命令、日志路径与每组状态。训练进度可另开终端查看：
 
 ```bash
-tail -f /your/output_dir/logs/T5_L0p01_train.log
+tail -f /your/output_dir/logs/H12_repair_train.log
 ```
 
 预处理失败立即停止。某一训练/测试组失败时默认继续其余组；加 `--fail_fast` 可立即
@@ -92,5 +103,12 @@ tail -f /your/output_dir/logs/T5_L0p01_train.log
 绘图失败也返回非零，可修复原因后用原命令追加 `--plot_only`，从现有成功组的浮点体
 重新出图，不执行预处理、训练或测试。此时 PNG/切片文件会按该清单重新生成。
 
-当前脚本不执行断点续训；重新执行完整九组时须指定新的输出根目录。中断运行不能
+当前脚本不执行断点续训；重新执行完整实验时须指定新的输出根目录。中断运行不能
 被视为完成结果，最终 Gaussian、最终重建体和完成状态均会检查。
+
+## 原九组软约束遍历
+
+如需运行原来的阈值 `[5, 10, 20]` × 权重 `[0.01, 0.05, 0.1]` 九组实验，在命令末尾
+显式添加 `--experiment soft_grid`。该模式 hard_action=none，组名仍为 `T5_L0p01` 等。
+未传入该选项时默认运行上面的三组 repair 实验。`--plot_only` 按保存清单中的实际分组
+重新出图，因此已有九组结果也可以继续使用。

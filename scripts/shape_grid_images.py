@@ -90,7 +90,14 @@ def render_case(case, scanner, output_dir, window, expected_shape):
                 axis.set_ylabel(f"{'XYZ'[vertical]} (dataset units)")
                 axis.ticklabel_format(axis="both", style="sci", scilimits=(-3, 3))
         fig.colorbar(artist, ax=axes.ravel().tolist(), shrink=0.65, label="Gaussian density")
-        if "needle_threshold" in case:
+        if "hard_ratio" in case:
+            header = (
+                f"{case['case']} | hard action = {case['hard_action']} | iteration {case['iteration']}\n"
+                f"soft threshold needle/sheet = {case['needle_threshold']:g}/{case['sheet_threshold']:g} | "
+                f"lambda needle/sheet = {case['lambda_needle']:g}/{case['lambda_sheet']:g}\n"
+                f"hard trigger needle/sheet = {case['hard_needle_ratio']:g}/{case['hard_sheet_ratio']:g}\n"
+            )
+        elif "needle_threshold" in case:
             header = (
                 f"{case['case']} | shape enabled = {case['shape_enabled']} | hard action = {case['hard_action']}\n"
                 f"threshold needle/sheet = {case['needle_threshold']:g}/{case['sheet_threshold']:g} | "
