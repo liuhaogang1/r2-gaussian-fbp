@@ -129,8 +129,18 @@ __global__ void preprocessCUDA(int P,
 	float inv_e = (hatb * hatc - hata * hate) * det_inv;
 	float inv_f = (hata * hatd - hatb * hatb) * det_inv;
 
-	glm::vec3 scale = scales[idx];
-	float max_scale = max(max(scale.x, scale.y), scale.z);
+	float max_scale;
+	if (scales != nullptr)
+	{
+		glm::vec3 scale = scales[idx];
+		max_scale = max(max(scale.x, scale.y), scale.z);
+	}
+	else
+	{
+		// Precomputed covariance is supplied without scale/rotation arrays.
+		// Its largest marginal standard deviation bounds every world axis.
+		max_scale = sqrtf(max(max(cov3D[0], cov3D[3]), cov3D[5]));
+	}
 	float3 my_radius = {
 		ceil((3.f * max_scale) / dVoxel_x),
 		ceil((3.f * max_scale) / dVoxel_y),

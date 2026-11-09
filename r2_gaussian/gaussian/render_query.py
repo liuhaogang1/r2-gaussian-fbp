@@ -16,14 +16,20 @@ from r2_gaussian.utils.geometry_utils import parallel_detector_half_extents
 
 
 def _load_raster_backend(pose_enabled):
-    if pose_enabled:
-        local_backend = (
-            Path(__file__).resolve().parents[1]
-            / "submodules"
-            / "self-xray-gaussian-rasterization-voxelization"
+    # Prefer this checkout over an editable installation of another checkout.
+    # CUDA fixes only take effect after rebuilding the matching local extension.
+    local_backend = (
+        Path(__file__).resolve().parents[1]
+        / "submodules"
+        / (
+            "self-xray-gaussian-rasterization-voxelization"
+            if pose_enabled
+            else "xray-gaussian-rasterization-voxelization"
         )
-        if str(local_backend) not in sys.path:
-            sys.path.insert(0, str(local_backend))
+    )
+    if str(local_backend) not in sys.path:
+        sys.path.insert(0, str(local_backend))
+    if pose_enabled:
         try:
             from self_xray_gaussian_rasterization_voxelization import (
                 GaussianRasterizationSettings,
