@@ -17,6 +17,9 @@ from argparse import ArgumentParser, Namespace
 
 sys.path.append("./")
 from r2_gaussian.utils.argument_utils import ParamGroup
+from r2_gaussian.utils.reference_options import (
+    REFERENCE_DEFAULTS, add_reference_arguments, migrate_reference_options,
+)
 
 
 class ModelParams(ParamGroup):
@@ -103,20 +106,6 @@ class OptimizationParams(ParamGroup):
         self.shape_split_count = 2
         self.shape_max_hard_actions_per_check = 32
 
-        # Optional sparse initialization-volume slice supervision.
-        self.slice_loss_enabled = False
-        self.slice_reference_path = ""
-        self.slice_axis = "z"
-        self.slice_start_iter = 500
-        self.slice_end_iter = 15000
-        self.slice_interval = 50
-        self.slice_filter_threshold = 0.01
-        self.slice_filter_ratio = 10.0
-        self.slice_max_points = 200_000
-        self.slice_query_chunk_size = 4096
-        self.lambda_slice = 0.05
-        self.slice_seed = 0
-
         # Optional pose-calibration branch.  All switches are disabled by
         # default so the historical training path remains unchanged.
         self.pose_enabled = False
@@ -136,6 +125,12 @@ class OptimizationParams(ParamGroup):
         self.cone_optimize_quaternion = True
         self.pose_lambda_magnitude = 0.0
         super().__init__(parser, "Optimization Parameters")
+        add_reference_arguments(parser.add_argument_group("Reference supervision"))
+        self.__dict__.update(REFERENCE_DEFAULTS)
+
+    def extract(self, args):
+        values = {**REFERENCE_DEFAULTS, **migrate_reference_options(vars(args))}
+        return super().extract(Namespace(**values))
 
 
 def get_combined_args(parser: ArgumentParser):

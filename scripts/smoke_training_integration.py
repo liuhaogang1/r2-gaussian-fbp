@@ -31,7 +31,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output_dir', type=Path, required=True)
     parser.add_argument('--source', type=Path, required=True)
-    parser.add_argument('--cases', nargs='+', default=['parallel', 'tv', 'densify', 'sparse', 'shape_repair', 'shape_split', 'shape_prune', 'resume'])
+    parser.add_argument('--cases', nargs='+', default=[
+        'parallel', 'tv', 'densify', 'reference_slice', 'reference_block',
+        'shape_repair', 'shape_split', 'shape_prune', 'resume',
+    ])
     parser.add_argument('--init', type=Path)
     args = parser.parse_args()
     out = args.output_dir.resolve()
@@ -66,12 +69,15 @@ def main():
             opt.densify_from_iter, opt.densify_until_iter = 1, 5
             opt.densification_interval, opt.densify_grad_threshold = 2, 0.
             opt.max_num_gaussians = 1200
-        if name == 'sparse':
-            opt.slice_loss_enabled = True
-            opt.slice_reference_path = str(source / 'vol_fbp.npy')
-            opt.slice_start_iter, opt.slice_end_iter, opt.slice_interval = 1, 6, 1
-            opt.slice_max_points, opt.slice_filter_ratio = 60, 10.
-            opt.slice_filter_threshold = None
+        reference_methods = {'sparse': 'slice', 'reference_slice': 'slice',
+                             'reference_block': 'block'}
+        if name in reference_methods:
+            opt.reference_enabled = True
+            opt.reference_method = reference_methods[name]
+            opt.reference_path = str(source / 'vol_fbp.npy')
+            opt.reference_start_iter, opt.reference_end_iter, opt.reference_interval = 1, 6, 1
+            opt.reference_slice_sample_ratio = .1 if name == 'sparse' else 1.
+            opt.reference_block_size = [8, 8, 8]
         if name.startswith('shape_'):
             opt.shape_enabled = opt.shape_needle_enabled = opt.shape_sheet_enabled = True
             opt.shape_start_iter, opt.shape_end_iter, opt.shape_check_interval = 1, 6, 1
@@ -81,9 +87,9 @@ def main():
             opt.shape_hard_action = {'shape_repair':'repair','shape_split':'split','shape_prune':'prune_low'}[name]
             opt.shape_low_density_threshold = 100. if name == 'shape_prune' else 0.
             opt.lambda_shape_needle = opt.lambda_shape_sheet = .001
-        counts = {'adam_steps':0, 'densify_calls':0, 'sparse_queries':0, 'shape_repaired':0, 'shape_split':0, 'shape_pruned':0}
+        counts = {'adam_steps':0, 'densify_calls':0, 'reference_steps':0, 'shape_repaired':0, 'shape_split':0, 'shape_pruned':0}
         original_step, original_densify = torch.optim.Adam.step, GaussianModel.densify_and_prune
-        original_sparse, original_hard = train.query_points, train._shape_hard_process
+        original_reference_loss, original_hard = train.reference_region_loss, train._shape_hard_process
         original_init = train.initialize_gaussian
         def step(self, *a, **kw):
             counts['adam_steps'] += 1
@@ -91,9 +97,11 @@ def main():
         def densify(self, *a, **kw):
             counts['densify_calls'] += 1
             return original_densify(self, *a, **kw)
-        def sparse(*a, **kw):
-            counts['sparse_queries'] += 1
-            return original_sparse(*a, **kw)
+        def reference_loss(*a, **kw):
+            result = original_reference_loss(*a, **kw)
+            assert all(torch.isfinite(value) for value in result[:2])
+            counts['reference_steps'] += 1
+            return result
         def hard(*a, **kw):
             result = original_hard(*a, **kw)
             for key in ('shape_repaired','shape_split','shape_pruned'):
@@ -109,7 +117,7 @@ def main():
             return result
         with mock.patch.object(torch.optim.Adam, 'step', step), \
              mock.patch.object(GaussianModel, 'densify_and_prune', densify), \
-             mock.patch.object(train, 'query_points', sparse), \
+             mock.patch.object(train, 'reference_region_loss', reference_loss), \
              mock.patch.object(train, '_shape_hard_process', hard), \
              mock.patch.object(train, 'initialize_gaussian', initialize):
             if name == 'resume':
@@ -122,7 +130,7 @@ def main():
         expected_steps = 4 if name == 'resume' else 5
         assert counts['adam_steps'] == expected_steps, (name, counts)
         if name == 'densify': assert counts['densify_calls'] > 0
-        if name == 'sparse': assert counts['sparse_queries'] == 6
+        assert counts['reference_steps'] == (6 if name in reference_methods else 0)
         if name.startswith('shape_'):
             key = {'shape_repair':'shape_repaired','shape_split':'shape_split','shape_prune':'shape_pruned'}[name]
             assert counts[key] > 0, counts

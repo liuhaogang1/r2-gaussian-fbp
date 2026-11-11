@@ -93,6 +93,47 @@ PyTorch/CUDA 环境中运行 `scripts/build_pose_rasterizer.ps1`；默认流程�
 现有的 rasterizer，不受新扩展影响。位姿结果保存在模型目录的
 `pose_calibration/` 下，原始 `meta_data.json` 不会被覆盖。
 
+## 可选：FBP 参考约束
+
+在管线 YAML 的 `train` 节设置以下字段。默认关闭参考约束，开启后默认比较整张 Z 切片。
+
+```yaml
+train:
+  reference_enabled: true
+  reference_method: slice          # slice / block
+  reference_path: ""               # 根据初始化来源选择 FBP，也可填写 NPY 路径
+  reference_loss: l1_grad          # l1 / l1_grad
+  reference_weight: 0.05
+  reference_grad_weight: 0.1
+  reference_start_iter: 500
+  reference_end_iter: 15000
+  reference_interval: 50
+  reference_seed: 0
+  reference_slice_axis: z
+  reference_slice_sample_ratio: 1.0
+  reference_block_size: [32, 32, 32]
+  reference_block_stride: [16, 16, 16]
+  reference_block_sampling: density_mix  # uniform / density_mix
+  reference_block_density_mix: 0.7
+```
+
+`reference_method: block` 查询三维块，默认按各轴半块间距建立重叠候选表。
+`density_mix` 将 30% 的均匀采样概率与 70% 的密度加权概率相加。
+密度权重取块内平均正密度的平方根。全零参考回退到均匀采样。
+抽中的块内所有体素参与比较。切片比例为 `1.0` 时比较全片，比例更小时在
+全片内均匀抽取体素和相邻体素对。
+
+参考体采用与训练数据对齐的 XYZ 网格和原密度尺度。损失为平均密度 L1
+加 `reference_grad_weight` 乘以有符号差分的 L1，再乘 `reference_weight`。
+切片比较面内差分，块比较三个方向的差分。固定参考约束与 `pose_enabled` 互斥。
+留出视角评估应使用由训练视角生成的参考体。
+
+管线命令行使用 `--train_reference_enabled`、`--train_reference_method block` 等参数。
+直接运行 `train.py` 时去掉 `train_` 前缀，并显式设置 `--reference_path`。
+旧 `slice_*` 配置中的开关、路径、方向、时间和比例可迁移到新字段。
+旧比例使用百分数，例如 `slice_filter_ratio: 10` 迁移为 `0.1`。
+`slice_filter_threshold`、`slice_max_points` 和 `slice_query_chunk_size` 已停用。
+
 ## 可选：抑制异常形状 Gaussian
 
 形状抑制默认关闭。关闭时不计算形状损失、不追踪异常状态，也不改变旧检查点的

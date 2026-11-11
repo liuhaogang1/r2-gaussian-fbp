@@ -7,6 +7,8 @@ build/
 *.egg-info
 r2_gaussian/submodules/self-xray-gaussian-rasterization-voxelization/build/
 r2_gaussian/submodules/self-xray-gaussian-rasterization-voxelization/*.egg-info/
+r2_gaussian/submodules/self-xray-gaussian-rasterization-voxelization/self_xray_gaussian_rasterization_voxelization/*.pyd
+r2_gaussian/submodules/xray-gaussian-rasterization-voxelization/xray_gaussian_rasterization_voxelization/*.pyd
 .vscode/
 data/
 output

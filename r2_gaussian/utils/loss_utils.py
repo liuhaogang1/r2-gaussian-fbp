@@ -12,7 +12,7 @@
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
-from math import exp
+from math import ceil, exp
 import torch.nn as nn
 
 
@@ -36,6 +36,36 @@ def tv_3d_loss(vol, reduction="sum"):
 
 def l1_loss(network_output, gt):
     return torch.abs((network_output - gt)).mean()
+
+
+def reference_region_loss(prediction, reference, spacing, ratio=1.0,
+                          generator=None, include_gradient=True):
+    """Return density and signed difference L1 losses and sample counts."""
+    if prediction.shape != reference.shape or prediction.ndim != 3:
+        raise ValueError("Reference and prediction must have matching XYZ shapes")
+
+    def mean_abs(values):
+        values = values.reshape(-1)
+        count = ceil(values.numel() * ratio)
+        if count < values.numel():
+            chosen = generator.choice(values.numel(), size=count, replace=False)
+            indices = torch.as_tensor(chosen, device=values.device, dtype=torch.long)
+            values = values.index_select(0, indices)
+        return values.abs().mean(), count
+
+    residual = prediction - reference
+    density, voxels = mean_abs(residual)
+    differences = []
+    edges = 0
+    if include_gradient:
+        minimum_spacing = min(spacing)
+        for axis, step in enumerate(spacing):
+            if prediction.shape[axis] > 1:
+                difference, count = mean_abs(torch.diff(residual, dim=axis))
+                differences.append(difference * (minimum_spacing / step))
+                edges += count
+    gradient = torch.stack(differences).mean() if differences else density.new_zeros(())
+    return density, gradient, voxels, edges
 
 
 def l2_loss(network_output, gt):

@@ -556,11 +556,12 @@ def prepare_real_branches(a,out,log):
     n=a.branch_iterations
     for name in ('ordinary','sparse'):
         config=dict(base,model_path=str(out/'real_branches'/name),iterations=n,pose_enabled=False,
-                    slice_loss_enabled=name=='sparse',densify_until_iter=0,shape_enabled=False,
+                    reference_enabled=name=='sparse',densify_until_iter=0,shape_enabled=False,
                     test_iterations=[n],save_iterations=[n],checkpoint_iterations=[n//2,n])
         if name=='sparse':
-            config.update(slice_reference_path=str(out/'real/dataset/vol_sparse_fbp.npy'),slice_start_iter=1,
-                slice_end_iter=n,slice_interval=1,slice_max_points=1024,slice_filter_ratio=10.,lambda_slice=.01)
+            config.update(reference_path=str(out/'real/dataset/vol_sparse_fbp.npy'),
+                reference_start_iter=1, reference_end_iter=n, reference_interval=1,
+                reference_slice_sample_ratio=.1, reference_weight=.01)
         path=out/f'{name}_train.yaml'
         path.write_text(yaml.safe_dump(config),encoding='utf-8')
     # Resume the main pose/ordinary checkpoint in an independent model directory.

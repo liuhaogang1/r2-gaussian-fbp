@@ -75,7 +75,9 @@ def signature(args, stage, command=None):
             paths += dataset_files(output)
     elif stage == "train":
         paths += dataset_files(source)
-        paths += [args.train_slice_reference_path, args.train_start_checkpoint]
+        paths.append(args.train_start_checkpoint)
+        if args.train_reference_enabled:
+            paths.append(args.train_reference_path)
         if not args.train_start_checkpoint:
             paths.append(args.train_ply_path or args.init_output)
     else:
