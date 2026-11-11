@@ -165,8 +165,10 @@ def _geometry_for_tigre(geometry, scanner, layout):
     origin = np.asarray(scanner["offOrigin"], dtype=np.float32)
     detector_offsets = np.asarray(geometry["tigre_offset_uv"], dtype=np.float32)
     geo.offOrigin = origin if layout["off_origin_order"] == "xyz" else origin[::-1].copy()
-    geo.offDetector = (detector_offsets if layout["off_detector_order"] == "uv"
-                       else detector_offsets[:, ::-1].copy())
+    from r2_gaussian.utils.geometry_utils import reorder_tigre_detector_offset
+    geo.offDetector = reorder_tigre_detector_offset(
+        detector_offsets, layout["off_detector_order"]
+    )
     count = len(geometry["scan_angles"])
     geo.rotDetector = np.zeros((count, 3), dtype=np.float32)
     geo.COR = np.zeros(count, dtype=np.float32)

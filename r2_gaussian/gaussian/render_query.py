@@ -11,10 +11,13 @@
 import sys
 import torch
 import math
+import importlib
+from functools import lru_cache
 from pathlib import Path
 from r2_gaussian.utils.geometry_utils import parallel_detector_half_extents
 
 
+@lru_cache(maxsize=2)
 def _load_raster_backend(pose_enabled):
     # Prefer this checkout over an editable installation of another checkout.
     # CUDA fixes only take effect after rebuilding the matching local extension.
@@ -27,41 +30,38 @@ def _load_raster_backend(pose_enabled):
             else "xray-gaussian-rasterization-voxelization"
         )
     )
-    if str(local_backend) not in sys.path:
-        sys.path.insert(0, str(local_backend))
-    if pose_enabled:
-        try:
-            from self_xray_gaussian_rasterization_voxelization import (
-                GaussianRasterizationSettings,
-                GaussianRasterizer,
-                GaussianVoxelizationSettings,
-                GaussianVoxelizer,
-            )
-            return (
-                GaussianRasterizationSettings,
-                GaussianRasterizer,
-                GaussianVoxelizationSettings,
-                GaussianVoxelizer,
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "Pose calibration requires the target repository's "
-                "self_xray_gaussian_rasterization_voxelization CUDA extension. "
-                "Build/install that extension before enabling pose_enabled."
-            ) from exc
+    local_backend = local_backend.resolve()
+    if str(local_backend) in sys.path:
+        sys.path.remove(str(local_backend))
+    sys.path.insert(0, str(local_backend))
+    package_name = ("self_" if pose_enabled else "") + "xray_gaussian_rasterization_voxelization"
+    try:
+        package = importlib.import_module(package_name)
+        extension = importlib.import_module(package_name + "._C")
+    except ImportError as exc:
+        raise RuntimeError(f"Build/install the local CUDA extension in {local_backend}") from exc
+    for module in (package, extension):
+        path = Path(module.__file__).resolve()
+        if path.parent != (local_backend / package_name).resolve():
+            raise RuntimeError(f"Backend loaded from another checkout or build copy: {path}; restart with the local extension")
+    from r2_gaussian.utils.backend_provenance import validate_extension_build
+    extension._verified_build = validate_extension_build(local_backend, extension)
+    return tuple(getattr(package, name) for name in (
+        "GaussianRasterizationSettings", "GaussianRasterizer",
+        "GaussianVoxelizationSettings", "GaussianVoxelizer"))
 
-    from xray_gaussian_rasterization_voxelization import (
-        GaussianRasterizationSettings,
-        GaussianRasterizer,
-        GaussianVoxelizationSettings,
-        GaussianVoxelizer,
-    )
-    return (
-        GaussianRasterizationSettings,
-        GaussianRasterizer,
-        GaussianVoxelizationSettings,
-        GaussianVoxelizer,
-    )
+
+def raster_backend_provenance(pose_enabled=False):
+    _load_raster_backend(pose_enabled)
+    name = ("self_" if pose_enabled else "") + "xray_gaussian_rasterization_voxelization._C"
+    extension = sys.modules[name]
+    backend = (Path(__file__).resolve().parents[1] / "submodules" /
+               (("self-" if pose_enabled else "") + "xray-gaussian-rasterization-voxelization"))
+    from r2_gaussian.utils.backend_provenance import validate_extension_build
+    current = validate_extension_build(backend, extension)
+    if current["binary_sha256"] != extension._verified_build["binary_sha256"]:
+        raise RuntimeError("CUDA binary changed after import; restart the process before using the rebuilt extension")
+    return current
 
 sys.path.append("./")
 from r2_gaussian.gaussian.gaussian_model import GaussianModel

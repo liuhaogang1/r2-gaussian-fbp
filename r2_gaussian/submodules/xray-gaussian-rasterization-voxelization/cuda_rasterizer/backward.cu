@@ -228,7 +228,6 @@ __global__ void computeCov2DCUDA(int P,
 
 	float dL_dhata = 0, dL_dhatb = 0, dL_dhatc = 0, dL_dhatd = 0, dL_dhate = 0, dL_dhatf = 0;
 	float denom = hata * hatd - hatb * hatb;
-	float denom2inv = 1.0f / ((denom * denom) + 0.0000001f);
 	float diamond = hata * hatd - hatb * hatb;
 
 	//! mu part gradient
@@ -238,15 +237,21 @@ __global__ void computeCov2DCUDA(int P,
 	if (mu_square > 0.0f){
 		mu = sqrt(2 * M_PI * circ / diamond);
 	}
-	float pi_mu= M_PI / (mu + 0.0000001f);
+	double pi_mu = mu > 0.0f ? M_PI / double(mu) : 0.0;
 	float circ_diamond = circ / diamond;
 
-	if (denom2inv != 0.0f && mu != 0.0f)
+	if (denom != 0.0f && mu > 0.0f)
 	{
 		// exp(*) part gradient
-		dL_dhata = denom2inv * (-hatd * hatd * dL_dconic.x + hatb * hatd * dL_dconic.y + (denom - hata * hatd) * dL_dconic.z);  // We remove 2 here because in render we do not *0.5
-		dL_dhatd = denom2inv * (-hata * hata * dL_dconic.z + hata * hatb * dL_dconic.y + (denom - hata * hatd) * dL_dconic.x);  // We remove 2 here because in render we do not *0.5
-		dL_dhatb = denom2inv * (2 * hatb * hatd * dL_dconic.x - (denom + 2 * hatb * hatb) * dL_dconic.y + 2 * hata * hatb * dL_dconic.z);
+		// Match the forward inverse without an absolute determinant damping.
+		// Off-diagonal conic gradients use the packed symmetric convention.
+		glm::dmat2 K = glm::inverse(glm::dmat2(hata, hatb, hatb, hatd));
+		glm::dmat2 G(dL_dconic.x, 0.5 * dL_dconic.y,
+		             0.5 * dL_dconic.y, dL_dconic.z);
+		glm::dmat2 grad = -glm::transpose(K) * G * glm::transpose(K);
+		dL_dhata = grad[0][0];
+		dL_dhatb = grad[0][1] + grad[1][0];
+		dL_dhatd = grad[1][1];
 
 		dL_dhata += pi_mu * ((hatd * hatf - hate * hate) / diamond -  hatd * circ_diamond / diamond) * dL_dmu;
 		dL_dhatb += pi_mu * ((2 * hatc * hate - 2 * hatf * hatb) / diamond + 2 * hatb * circ_diamond / diamond) * dL_dmu;
@@ -376,9 +381,9 @@ __device__ void computeCov3D(int idx, const glm::vec3 scale, float mod, const gl
 
 	// Gradients of loss w.r.t. scale
 	glm::vec3* dL_dscale = dL_dscales + idx;
-	dL_dscale->x = glm::dot(Rt[0], dL_dMt[0]);
-	dL_dscale->y = glm::dot(Rt[1], dL_dMt[1]);
-	dL_dscale->z = glm::dot(Rt[2], dL_dMt[2]);
+	dL_dscale->x = mod * glm::dot(Rt[0], dL_dMt[0]);
+	dL_dscale->y = mod * glm::dot(Rt[1], dL_dMt[1]);
+	dL_dscale->z = mod * glm::dot(Rt[2], dL_dMt[2]);
 
 	dL_dMt[0] *= s.x;
 	dL_dMt[1] *= s.y;

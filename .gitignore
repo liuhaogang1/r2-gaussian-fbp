@@ -1,9 +1,12 @@
 __pycache__
+*.pyd
+*.so
+*.pyd.build.json
+*.so.build.json
 build/
 *.egg-info
 r2_gaussian/submodules/self-xray-gaussian-rasterization-voxelization/build/
 r2_gaussian/submodules/self-xray-gaussian-rasterization-voxelization/*.egg-info/
-r2_gaussian/submodules/self-xray-gaussian-rasterization-voxelization/self_xray_gaussian_rasterization_voxelization/*.pyd
 .vscode/
 data/
 output
@@ -16,11 +19,18 @@ FIPS_processed
 other_scripts
 
 # Local analysis and test artifacts (keep these directories on disk)
+/.audit_tmp/
 /analysis/
+/docs/
 /.flow_test_outputs/
 /.pytest_cache/
 /.ruff_cache/
 /fbp_preview_local_20261028/
+/real_data_validation_*/
+/real_data_validation_*_center.json
+/.server_plan_current.json
+/shape_grid_*/
+/tests/
 
 # Images and NumPy arrays at any depth, including uppercase extensions
 *.[jJ][pP][gG]

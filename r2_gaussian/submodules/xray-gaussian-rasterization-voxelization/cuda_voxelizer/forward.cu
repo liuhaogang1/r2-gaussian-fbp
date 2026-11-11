@@ -137,7 +137,7 @@ __global__ void preprocessCUDA(int P,
 	float max_scale;
 	if (scales != nullptr)
 	{
-		glm::vec3 scale = scales[idx];
+		glm::vec3 scale = fabsf(scale_modifier) * scales[idx];
 		max_scale = max(max(scale.x, scale.y), scale.z);
 	}
 	else

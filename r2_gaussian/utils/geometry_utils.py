@@ -8,15 +8,29 @@ reader, so detector lengths have already been multiplied by 2/max(sVoxel).
 import numpy as np
 
 
-def tigre_detector_offset(offset):
-    """Map detector [U,V] offsets to TIGRE's [U,-V] convention.
+def reorder_tigre_detector_offset(offset_uv, order="vu"):
+    """Reorder already row-flipped TIGRE detector offsets from UV or VU."""
+    values = np.asarray(offset_uv, dtype=np.float32)
+    if values.shape[-1:] != (2,) or not np.isfinite(values).all():
+        raise ValueError("TIGRE detector offsets must be finite [...,2] values")
+    if order == "uv":
+        return values.copy()
+    if order == "vu":
+        return values[..., ::-1].copy()
+    raise ValueError("TIGRE detector offset order must be 'uv' or 'vu'")
 
-    TIGRE's first offset component shifts the horizontal detector axis, while
-    its second component shifts the vertical axis before saved-row reversal.
-    The vertical sign is inverted because saved projection rows grow down.
+
+def tigre_detector_offset(offset, order="vu"):
+    """Map physical detector [U,V] offsets to TIGRE's selected axis order.
+
+    Projection rows are reversed before TIGRE reconstruction, so V changes
+    sign. The local pytigre build uses VU order: [U,V] becomes [-V,U].
     """
-    u, v = offset
-    return np.asarray([u, -v], dtype=np.float32)
+    values = np.asarray(offset, dtype=np.float32)
+    if values.shape != (2,) or not np.isfinite(values).all():
+        raise ValueError("Detector offset must contain finite physical [U,V] values")
+    uv_after_row_flip = np.asarray([values[0], -values[1]], dtype=np.float32)
+    return reorder_tigre_detector_offset(uv_after_row_flip, order)
 
 
 def parallel_detector_half_extents(scanner):

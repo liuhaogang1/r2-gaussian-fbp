@@ -1,6 +1,7 @@
 import yaml
 import json
 import os.path as osp
+from pathlib import Path
 
 
 def args2string(hp):
@@ -11,7 +12,7 @@ def args2string(hp):
     return "".join("\t" + line for line in json_hp.splitlines(True))
 
 
-def load_config(path, default_path=None):
+def load_config(path, default_path=None, _seen=()):
     """Loads config file.
 
     Args:
@@ -19,11 +20,16 @@ def load_config(path, default_path=None):
         default_path (bool): whether to use default path
     """
     # Load configuration from file itself
-    if not osp.exists(path):
-        return {}
+    path = Path(path).resolve()
+    if path in _seen:
+        raise ValueError(f"Cyclic config inheritance: {path}")
+    if not path.is_file():
+        raise FileNotFoundError(f"Configuration file does not exist: {path}")
 
-    with open(path, "r") as f:
-        cfg_special = yaml.load(f, Loader=yaml.Loader)
+    with path.open("r", encoding="utf-8") as f:
+        cfg_special = yaml.safe_load(f) or {}
+    if not isinstance(cfg_special, dict):
+        raise ValueError(f"Configuration must contain a mapping: {path}")
 
     # Check if we should inherit from a config
     inherit_from = cfg_special.get("inherit_from")
@@ -31,10 +37,12 @@ def load_config(path, default_path=None):
     # If yes, load this config first as default
     # If no, use the default_path
     if inherit_from is not None:
-        cfg = load_config(inherit_from, default_path)
+        parent = Path(inherit_from)
+        if not parent.is_absolute():
+            parent = path.parent / parent
+        cfg = load_config(parent, default_path, (*_seen, path))
     elif default_path is not None:
-        with open(default_path, "r") as f:
-            cfg = yaml.load(f, Loader=yaml.Loader)
+        cfg = load_config(default_path, _seen=(*_seen, path))
     else:
         cfg = dict()
 

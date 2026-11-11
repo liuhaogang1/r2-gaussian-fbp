@@ -138,7 +138,6 @@ __global__ void computeCov2DCUDA(int P,
 
 	float dL_dhata = 0, dL_dhatb = 0, dL_dhatc = 0, dL_dhatd = 0, dL_dhate = 0, dL_dhatf = 0;
 	float denom = hata * hatd - hatb * hatb;
-	float denom2inv = 1.0f / ((denom * denom) + 0.0000001f);
 	float diamond = hata * hatd - hatb * hatb;
 
 	//! mu part gradient
@@ -148,15 +147,21 @@ __global__ void computeCov2DCUDA(int P,
 	if (mu_square > 0.0f){
 		mu = sqrt(2 * M_PI * circ / diamond);
 	}
-	float pi_mu= M_PI / (mu + 0.0000001f);
+	double pi_mu = mu > 0.0f ? M_PI / double(mu) : 0.0;
 	float circ_diamond = circ / diamond;
 
-	if (denom2inv != 0.0f && mu != 0.0f)
+	if (denom != 0.0f && mu > 0.0f)
 	{
 		// exp(*) part gradient
-		dL_dhata = denom2inv * (-hatd * hatd * dL_dconic.x + hatb * hatd * dL_dconic.y + (denom - hata * hatd) * dL_dconic.z);  // We remove 2 here because in render we do not *0.5
-		dL_dhatd = denom2inv * (-hata * hata * dL_dconic.z + hata * hatb * dL_dconic.y + (denom - hata * hatd) * dL_dconic.x);  // We remove 2 here because in render we do not *0.5
-		dL_dhatb = denom2inv * (2 * hatb * hatd * dL_dconic.x - (denom + 2 * hatb * hatb) * dL_dconic.y + 2 * hata * hatb * dL_dconic.z);
+		// Match the forward inverse without an absolute determinant damping.
+		// Off-diagonal conic gradients use the packed symmetric convention.
+		glm::dmat2 K = glm::inverse(glm::dmat2(hata, hatb, hatb, hatd));
+		glm::dmat2 G(dL_dconic.x, 0.5 * dL_dconic.y,
+		             0.5 * dL_dconic.y, dL_dconic.z);
+		glm::dmat2 grad = -glm::transpose(K) * G * glm::transpose(K);
+		dL_dhata = grad[0][0];
+		dL_dhatb = grad[0][1] + grad[1][0];
+		dL_dhatd = grad[1][1];
 
 		dL_dhata += pi_mu * ((hatd * hatf - hate * hate) / diamond -  hatd * circ_diamond / diamond) * dL_dmu;
 		dL_dhatb += pi_mu * ((2 * hatc * hate - 2 * hatf * hatb) / diamond + 2 * hatb * circ_diamond / diamond) * dL_dmu;
@@ -186,7 +191,7 @@ __global__ void computeCov2DCUDA(int P,
 			dL_dcov[6 * idx + i] = 0;
 	}
 
-	if (mode == 1){
+	{ // Both projection modes depend on the view rotation W.
 		// Gradients of loss w.r.t. M
 		// cov2D = transpose(M) * transpose(Vrk) * M;
 
@@ -217,16 +222,34 @@ __global__ void computeCov2DCUDA(int P,
 		float dL_dJ21 = W[1][0]*dL_dM20 + W[1][1]*dL_dM21 + W[1][2]*dL_dM22;
 		float dL_dJ22 = W[2][0]*dL_dM20 + W[2][1]*dL_dM21 + W[2][2]*dL_dM22;
 
-		// kschoi
-		float dL_dW00 = dL_dM00*J[0][0] + dL_dM01*J[0][1] + dL_dM02*J[0][2];
-		float dL_dW01 = dL_dM00*J[1][0] + dL_dM01*J[1][1] + dL_dM02*J[1][2];
-		float dL_dW02 = dL_dM00*J[2][0] + dL_dM01*J[2][1] + dL_dM02*J[2][2];
-		float dL_dW10 = dL_dM10*J[0][0] + dL_dM11*J[0][1] + dL_dM12*J[0][2];
-		float dL_dW11 = dL_dM10*J[1][0] + dL_dM11*J[1][1] + dL_dM12*J[1][2];
-		float dL_dW12 = dL_dM10*J[2][0] + dL_dM11*J[2][1] + dL_dM12*J[2][2];
-		float dL_dW20 = dL_dM20*J[0][0] + dL_dM21*J[0][1] + dL_dM22*J[0][2];
-		float dL_dW21 = dL_dM20*J[1][0] + dL_dM21*J[1][1] + dL_dM22*J[1][2];
-		float dL_dW22 = dL_dM20*J[2][0] + dL_dM21*J[2][1] + dL_dM22*J[2][2];
+		// GLM indexes matrices as [column][row]. Build G_M by columns, then
+		// apply the chain rule for M = WJ: G_W = G_M * transpose(J).
+		const glm::mat3 grad_M(
+			glm::vec3(dL_dM00, dL_dM01, dL_dM02),
+			glm::vec3(dL_dM10, dL_dM11, dL_dM12),
+			glm::vec3(dL_dM20, dL_dM21, dL_dM22));
+		const glm::mat3 grad_W = grad_M * glm::transpose(J);
+		const float dL_dW00 = grad_W[0][0];
+		const float dL_dW01 = grad_W[1][0];
+		const float dL_dW02 = grad_W[2][0];
+		const float dL_dW10 = grad_W[0][1];
+		const float dL_dW11 = grad_W[1][1];
+		const float dL_dW12 = grad_W[2][1];
+		const float dL_dW20 = grad_W[0][2];
+		const float dL_dW21 = grad_W[1][2];
+		const float dL_dW22 = grad_W[2][2];
+
+		if (mode == 0) {
+			// Parallel J is independent of the mean. Only W contributes here;
+			// the projected-center path is accumulated by preprocessCUDA later.
+			const float grad_W[12] = {
+				dL_dW00, dL_dW01, dL_dW02, 0.0f,
+				dL_dW10, dL_dW11, dL_dW12, 0.0f,
+				dL_dW20, dL_dW21, dL_dW22, 0.0f};
+			for (int i = 0; i < 12; ++i)
+				atomicAdd(&dL_dviewmatrix[i], grad_W[i]);
+			return;
+		}
 
 		float tx = t.x;
 		float ty = t.y;
@@ -263,9 +286,9 @@ __global__ void computeCov2DCUDA(int P,
 		float dL_dV33 = 0.0;
 		// kschoi
 		float dL_dtdW_dV_indiv[16] = {
-			dL_dW00 + dL_dV00, dL_dW10 + dL_dV10, dL_dW20 + dL_dV20, 0.0 + dL_dV30,
-			dL_dW01 + dL_dV01, dL_dW11 + dL_dV11, dL_dW21 + dL_dV21, 0.0 + dL_dV31,
-			dL_dW02 + dL_dV02, dL_dW12 + dL_dV12, dL_dW22 + dL_dV22, 0.0 + dL_dV32,
+			dL_dW00 + dL_dV00, dL_dW01 + dL_dV10, dL_dW02 + dL_dV20, 0.0 + dL_dV30,
+			dL_dW10 + dL_dV01, dL_dW11 + dL_dV11, dL_dW12 + dL_dV21, 0.0 + dL_dV31,
+			dL_dW20 + dL_dV02, dL_dW21 + dL_dV12, dL_dW22 + dL_dV22, 0.0 + dL_dV32,
 			0.0 + dL_dV03, 0.0 + dL_dV13, 0.0 + dL_dV23, 0.0 + dL_dV33
 		};
 		// kschoi
@@ -345,9 +368,9 @@ __device__ void computeCov3D(int idx, const glm::vec3 scale, float mod, const gl
 
 	// Gradients of loss w.r.t. scale
 	glm::vec3* dL_dscale = dL_dscales + idx;
-	dL_dscale->x = glm::dot(Rt[0], dL_dMt[0]);
-	dL_dscale->y = glm::dot(Rt[1], dL_dMt[1]);
-	dL_dscale->z = glm::dot(Rt[2], dL_dMt[2]);
+	dL_dscale->x = mod * glm::dot(Rt[0], dL_dMt[0]);
+	dL_dscale->y = mod * glm::dot(Rt[1], dL_dMt[1]);
+	dL_dscale->z = mod * glm::dot(Rt[2], dL_dMt[2]);
 
 	dL_dMt[0] *= s.x;
 	dL_dMt[1] *= s.y;

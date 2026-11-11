@@ -28,8 +28,10 @@ def prepare_output_and_logger(args):
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
     os.makedirs(args.model_path, exist_ok=True)
-    with open(osp.join(args.model_path, "cfg_args"), "w") as cfg_log_f:
+    with open(osp.join(args.model_path, "cfg_args"), "w", encoding="utf-8") as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
+    from r2_gaussian.utils.config_io import write_saved_config
+    write_saved_config(args.model_path, vars(args))
 
     # Save to yaml
     args_dict = vars(args)

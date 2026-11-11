@@ -58,9 +58,9 @@ static __device__ void computeCov3D(int idx, const glm::vec3 scale, float mod, c
 
 	// Gradients of loss w.r.t. scale
 	glm::vec3* dL_dscale = dL_dscales + idx;
-	dL_dscale->x = glm::dot(Rt[0], dL_dMt[0]);
-	dL_dscale->y = glm::dot(Rt[1], dL_dMt[1]);
-	dL_dscale->z = glm::dot(Rt[2], dL_dMt[2]);
+	dL_dscale->x = mod * glm::dot(Rt[0], dL_dMt[0]);
+	dL_dscale->y = mod * glm::dot(Rt[1], dL_dMt[1]);
+	dL_dscale->z = mod * glm::dot(Rt[2], dL_dMt[2]);
 
 	dL_dMt[0] *= s.x;
 	dL_dMt[1] *= s.y;
@@ -118,57 +118,22 @@ static __global__ void computeCov3DCUDA(int P,
 		0.0f, 0.0f, 1.0f / dVoxel_z);
 	glm::mat3 cov = glm::transpose(M) * glm::transpose(Vrk) * M;
 
-	float hata = cov[0][0];
-	float hatb = cov[0][1];
-	float hatc = cov[0][2];
-	float hatd = cov[1][1];
-	float hate = cov[1][2];
-	float hatf = cov[2][2];
-	float denom = hata * hatd * hatf + 2 * hatb * hatc * hate - hata * hate * hate - hatf * hatb * hatb - hatd * hatc * hatc;
-	float denom2inv = 1.0f / ((denom * denom) + 0.0000001f);
-
-	float dL_dhata = 0, dL_dhatb = 0, dL_dhatc = 0, dL_dhatd = 0, dL_dhate = 0, dL_dhatf = 0;
-
-	if (denom2inv != 0)
-	{
-		float denom_da = hatd * hatf - hate * hate;
-		float denom_db = 2 * hatc * hate - 2 * hatf * hatb;
-		float denom_dc = 2 * hatb * hate - 2 * hatd * hatc;
-		float denom_dd = hata * hatf - hatc * hatc;
-		float denom_de = 2 * hatb * hatc - 2 * hata * hate;
-		float denom_df = hata * hatd - hatb * hatb;
-		
-		float ce_bf = hatc * hate - hatb * hatf;
-		float be_cd = hatb * hate - hatc * hatd;
-		float bc_ae = hatb * hatc - hata * hate;
-
-		dL_dhata = denom2inv * (-denom_da*denom_da*dL_dconic_a - ce_bf*denom_da*dL_dconic_b - be_cd*denom_da*dL_dconic_c + (hatf*denom-denom_dd*denom_da)*dL_dconic_d + (-hate*denom-bc_ae*denom_da)*dL_dconic_e + (hatd*denom-denom_df*denom_da)*dL_dconic_f);
-		dL_dhatb = denom2inv * (-denom_da*denom_db*dL_dconic_a + (-hatf*denom-ce_bf*denom_db)*dL_dconic_b + (hate*denom-be_cd*denom_db)*dL_dconic_c - denom_dd*denom_db*dL_dconic_d + (hatc*denom-bc_ae*denom_db)*dL_dconic_e + (-2*hatb*denom-denom_df*denom_db)*dL_dconic_f);
-		dL_dhatc = denom2inv * (-denom_da*denom_dc*dL_dconic_a + (hate*denom-ce_bf*denom_dc)*dL_dconic_b + (-hatd*denom-be_cd*denom_dc)*dL_dconic_c + (-2*hatc*denom-denom_dd*denom_dc)*dL_dconic_d + (hatb*denom-bc_ae*denom_dc)*dL_dconic_e - denom_df*denom_dc*dL_dconic_f);
-		dL_dhatd = denom2inv * ((hatf*denom-denom_da*denom_dd)*dL_dconic_a - ce_bf*denom_dd*dL_dconic_b +(-hatc*denom-be_cd*denom_dd)*dL_dconic_c - denom_dd*denom_dd*dL_dconic_d - bc_ae*denom_dd*dL_dconic_e + (hata*denom-denom_df*denom_dd)*dL_dconic_f);
-		dL_dhate = denom2inv * ((-2*hate*denom-denom_da*denom_de)*dL_dconic_a + (hatc*denom-ce_bf*denom_de)*dL_dconic_b + (hatb*denom-be_cd*denom_de)*dL_dconic_c - denom_dd*denom_de*dL_dconic_d + (-hata*denom-bc_ae*denom_de)*dL_dconic_e + -denom_df*denom_de*dL_dconic_f);
-		dL_dhatf = denom2inv * ((hatd*denom-denom_da*denom_df)*dL_dconic_a + (-hatb*denom-ce_bf*denom_df)*dL_dconic_b - be_cd*denom_df*dL_dconic_c + (hata*denom-denom_dd*denom_df)*dL_dconic_d - bc_ae*denom_df*dL_dconic_e - denom_df*denom_df*dL_dconic_f);
-
-		// Gradients of loss L w.r.t. each 3D covariance matrix (Vrk) entry
-		// dL_da
-		dL_dcov[6 * idx + 0] += M[0][0]*M[0][0]*dL_dhata + M[0][0]*M[1][0]*dL_dhatb + M[0][0]*M[2][0]*dL_dhatc + M[1][0]*M[1][0]*dL_dhatd + M[1][0]*M[2][0]*dL_dhate + M[2][0]*M[2][0]*dL_dhatf;
-		// dL_dd
-		dL_dcov[6 * idx + 3] += M[0][1]*M[0][1]*dL_dhata + M[0][1]*M[1][1]*dL_dhatb + M[0][1]*M[2][1]*dL_dhatc + M[1][1]*M[1][1]*dL_dhatd + M[1][1]*M[2][1]*dL_dhate + M[2][1]*M[2][1]*dL_dhatf;
-		// dL_df
-		dL_dcov[6 * idx + 5] += M[0][2]*M[0][2]*dL_dhata + M[0][2]*M[1][2]*dL_dhatb + M[0][2]*M[2][2]*dL_dhatc + M[1][2]*M[1][2]*dL_dhatd + M[1][2]*M[2][2]*dL_dhate + M[2][2]*M[2][2]*dL_dhatf;
-		
-		// dL_db
-		dL_dcov[6 * idx + 1] += 2*M[0][0]*M[0][1]*dL_dhata + (M[0][1]*M[1][0]+M[0][0]*M[1][1])*dL_dhatb + (M[0][1]*M[2][0]+M[0][0]*M[2][1])*dL_dhatc + 2*M[1][0]*M[1][1]*dL_dhatd + (M[1][1]*M[2][0]+M[1][0]*M[2][1])*dL_dhate + 2*M[2][0]*M[2][1]*dL_dhatf;
-		// dL_dc
-		dL_dcov[6 * idx + 2] += 2*M[0][0]*M[0][2]*dL_dhata + (M[0][2]*M[1][0]+M[0][0]*M[1][2])*dL_dhatb + (M[0][2]*M[2][0]+M[0][0]*M[2][2])*dL_dhatc + 2*M[1][0]*M[1][2]*dL_dhatd + (M[1][2]*M[2][0]+M[1][0]*M[2][2])*dL_dhate + 2*M[2][0]*M[2][2]*dL_dhatf;
-		// dL_de
-		dL_dcov[6 * idx + 4] += 2*M[0][1]*M[0][2]*dL_dhata + (M[0][2]*M[1][1]+M[0][1]*M[1][2])*dL_dhatb + (M[0][2]*M[2][1]+M[0][1]*M[2][2])*dL_dhatc + 2*M[1][1]*M[1][2]*dL_dhatd + (M[1][2]*M[2][1]+M[1][1]*M[2][2])*dL_dhate + 2*M[2][1]*M[2][2]*dL_dhatf;
-	}
-	else
-	{
-		for (int i = 0; i < 6; i++)
-			dL_dcov[6 * idx + i] = 0;
-	}
+	// Differentiate K = inverse(cov) directly. A fixed det^2 epsilon
+	// would damp the gradient without any corresponding forward operation.
+	// Double intermediates avoid squaring a small float determinant.
+	glm::dmat3 K = glm::inverse(glm::dmat3(cov));
+	glm::dmat3 G(
+		dL_dconic_a, 0.5 * dL_dconic_b, 0.5 * dL_dconic_c,
+		0.5 * dL_dconic_b, dL_dconic_d, 0.5 * dL_dconic_e,
+		0.5 * dL_dconic_c, 0.5 * dL_dconic_e, dL_dconic_f);
+	glm::dmat3 grad = -glm::transpose(K) * G * glm::transpose(K);
+	// Pack the shared off-diagonal entries and undo voxel normalization.
+	dL_dcov[6 * idx + 0] += grad[0][0] / (double(dVoxel_x) * dVoxel_x);
+	dL_dcov[6 * idx + 1] += (grad[0][1] + grad[1][0]) / (double(dVoxel_x) * dVoxel_y);
+	dL_dcov[6 * idx + 2] += (grad[0][2] + grad[2][0]) / (double(dVoxel_x) * dVoxel_z);
+	dL_dcov[6 * idx + 3] += grad[1][1] / (double(dVoxel_y) * dVoxel_y);
+	dL_dcov[6 * idx + 4] += (grad[1][2] + grad[2][1]) / (double(dVoxel_y) * dVoxel_z);
+	dL_dcov[6 * idx + 5] += grad[2][2] / (double(dVoxel_z) * dVoxel_z);
 }
 
 

@@ -1,10 +1,13 @@
 from pathlib import Path
+import sys
 
 from setuptools import setup
 from torch.utils.cpp_extension import CUDAExtension, BuildExtension
 
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parents[2]))
+from r2_gaussian.utils.backend_provenance import provenance_build_ext
 # Reuse the existing vendored GLM headers; the original rasterizer remains
 # untouched and continues to provide the default backend.
 GLM = ROOT.parent / "xray-gaussian-rasterization-voxelization" / "third_party" / "glm"
@@ -36,5 +39,5 @@ setup(
             },
         )
     ],
-    cmdclass={"build_ext": BuildExtension},
+    cmdclass={"build_ext": provenance_build_ext(BuildExtension, ROOT)},
 )

@@ -205,6 +205,7 @@ DEFAULTS: dict[str, Any] = {
     "train_lambda_dssim": 0.25,
     "train_lambda_tv": 0.05,
     "train_tv_vol_size": 32,
+    "train_projection_data_range": 0.0,
     "train_density_min_threshold": 0.00001,
     "train_densification_interval": 100,
     "train_densify_from_iter": 500,
@@ -257,6 +258,7 @@ DEFAULTS: dict[str, Any] = {
     "test_scale_max": 0.5,
     "test_compute_cov3D_python": False,
     "test_debug": False,
+    "test_projection_data_range": None,
     "test_iteration": -1,
     "test_skip_render_train": False,
     "test_skip_render_test": False,
@@ -466,7 +468,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("density_lr_max_steps", int), ("scaling_lr_init", float), ("scaling_lr_final", float),
         ("scaling_lr_max_steps", int), ("rotation_lr_init", float), ("rotation_lr_final", float),
         ("rotation_lr_max_steps", int), ("lambda_dssim", float), ("lambda_tv", float),
-        ("tv_vol_size", int), ("density_min_threshold", float), ("densification_interval", int),
+        ("tv_vol_size", int), ("projection_data_range", float), ("density_min_threshold", float), ("densification_interval", int),
         ("densify_from_iter", int), ("densify_until_iter", int), ("densify_grad_threshold", float),
         ("densify_scale_threshold", float), ("max_screen_size", float), ("max_scale", float),
         ("max_num_gaussians", int), ("slice_loss_enabled", bool),
@@ -509,6 +511,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Test parameters.
     test_specs: list[tuple[str, Any]] = [
+        ("projection_data_range", float),
         ("source_path", Path), ("model_path", Path), ("data_device", str), ("ply_path", Path),
         ("scale_min", float), ("scale_max", float), ("compute_cov3D_python", bool), ("debug", bool),
     ]
@@ -652,9 +655,16 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
         "center_resize_order": "fbp_resize_order", "center_projection_scale": "fbp_projection_scale",
         "center_pixel_size": "fbp_pixel_size",
     }
+    center_pitch_inherited = values["center_pixel_size"] is None
     for key, source in inherit.items():
         if values[key] is None:
             values[key] = values[source]
+    # Center finding consumes physical detector pitch; FBP may specify axis pitch.
+    if (center_pitch_inherited and values["fbp_mode"] == "cone"
+            and values["fbp_pixel_size_kind"] == "axis"):
+        if not (0 < values["fbp_DSO"] < values["fbp_DSD"]):
+            raise ValueError("Cone geometry requires 0 < fbp_DSO < fbp_DSD")
+        values["center_pixel_size"] *= values["fbp_DSD"] / values["fbp_DSO"]
     # Preserve the old wrapper's center_search_min/max -> pair scan behavior
     # when the newer pair-specific options were not supplied.
     if values["center_pair_min_offset_px"] == DEFAULTS["center_pair_min_offset_px"] and values["center_search_min_px"] != DEFAULTS["center_search_min_px"]:
@@ -798,7 +808,10 @@ def build_fbp_command(args: argparse.Namespace, center_json: Path | None, manual
 
 
 def build_init_command(args: argparse.Namespace, init_output: Path) -> list[str]:
+    from scripts.pipeline_artifacts import init_metadata_path
+
     command = [sys.executable, str(ROOT / "init_from_fbp.py")]
+    add_option(command, "--metadata", init_metadata_path(args))
     if args.init_source == "train_fbp" and getattr(args, "stripe_correction", None) is not None:
         add_option(command, "--stripe_correction", json.dumps(args.stripe_correction))
     if args.init_source == "full_fbp":
@@ -808,8 +821,6 @@ def build_init_command(args: argparse.Namespace, init_output: Path) -> list[str]
         add_bool(command, "--use_train_fbp", True)
         add_option(command, "--fbp_output", args.init_fbp_output)
     else:
-        if args.init_volume is None:
-            raise ValueError("--init_volume is required when --init_source=custom")
         add_option(command, "--volume", args.init_volume)
     add_option(command, "--output", init_output)
     if getattr(args, "init_denoise", False):
@@ -837,7 +848,7 @@ def write_train_config(args: argparse.Namespace, path: Path, source: Path, model
     """Write a flat train.py config so options unsupported by argparse's
     legacy None-typed arguments (for example max_scale) still work."""
     names = (
-        "data_device", "ply_path", "scale_min", "scale_max", "iterations",
+        "data_device", "ply_path", "scale_min", "scale_max", "iterations", "projection_data_range",
         "position_lr_init", "position_lr_final", "position_lr_max_steps", "density_lr_init",
         "density_lr_final", "density_lr_max_steps", "scaling_lr_init", "scaling_lr_final",
         "scaling_lr_max_steps", "rotation_lr_init", "rotation_lr_final", "rotation_lr_max_steps",
@@ -894,7 +905,7 @@ def build_train_command(args: argparse.Namespace, init_output: Path, train_confi
     add_option(command, "--ply_path", ply)
     add_option(command, "--config", train_config_path)
     scalar_names = (
-        "data_device", "scale_min", "scale_max", "iterations", "position_lr_init", "position_lr_final",
+        "data_device", "scale_min", "scale_max", "iterations", "projection_data_range", "position_lr_init", "position_lr_final",
         "position_lr_max_steps", "density_lr_init", "density_lr_final", "density_lr_max_steps",
         "scaling_lr_init", "scaling_lr_final", "scaling_lr_max_steps", "rotation_lr_init",
         "rotation_lr_final", "rotation_lr_max_steps", "lambda_dssim", "lambda_tv", "tv_vol_size",
@@ -937,7 +948,7 @@ def build_test_command(args: argparse.Namespace, pose_result: Path | None) -> li
     model = args.test_model_path or args.train_model_path or args.model_path
     command = [sys.executable, str(ROOT / "test.py"), "-s", str(source), "-m", str(model)]
     add_option(command, "--iteration", args.test_iteration)
-    for name in ("data_device", "ply_path", "scale_min", "scale_max"):
+    for name in ("data_device", "ply_path", "scale_min", "scale_max", "projection_data_range"):
         add_option(command, "--" + name, getattr(args, "test_" + name))
     add_bool(command, "--compute_cov3D_python", args.test_compute_cov3D_python)
     add_bool(command, "--debug", args.test_debug)
@@ -950,6 +961,9 @@ def build_test_command(args: argparse.Namespace, pose_result: Path | None) -> li
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    for value in (args.train_projection_data_range, args.test_projection_data_range):
+        if value is not None and (not math.isfinite(value) or value < 0):
+            raise ValueError("projection_data_range must be 0 (automatic) or positive and finite")
     if getattr(args, "stripe_correction", None) is not None:
         for name in ("stripe_ncore", "stripe_row_chunk"):
             value = getattr(args, name, 1)
@@ -1209,7 +1223,7 @@ def main(args: argparse.Namespace) -> None:
     train_stage = stage_in_window(args, "train")
     train_ply = artifact_for_init(args, init_output)
     if train_stage:
-        if not args.dry_run and not train_ply.exists():
+        if not args.dry_run and not args.train_start_checkpoint and not train_ply.exists():
             raise FileNotFoundError(f"Initialization point cloud is missing: {train_ply}")
         train_source = Path(args.train_source_path or args.output_dir).resolve()
         train_model = Path(args.train_model_path or args.model_path).resolve()
@@ -1223,14 +1237,17 @@ def main(args: argparse.Namespace) -> None:
 
     test_stage = stage_in_window(args, "test")
     if test_stage:
-        pose_result = args.test_pose_result.resolve() if args.test_pose_result is not None else None
-        if pose_result is None and args.train_pose_enabled:
-            pose_model_root = Path(args.test_model_path or args.train_model_path or args.model_path).resolve()
-            candidate = pose_model_root / "pose_calibration" / (
-                f"iteration_{args.test_iteration}" if args.test_iteration >= 0 else ""
-            ) / "pose_offsets.npz"
-            if args.test_iteration >= 0 and (candidate.exists() or args.dry_run):
-                pose_result = candidate
+        pose_model_root = Path(args.test_model_path or args.train_model_path or args.model_path).resolve()
+        if args.test_pose_result is not None:
+            pose_result = args.test_pose_result.resolve()
+        elif args.dry_run:
+            pose_result = None
+            if args.train_pose_enabled and args.test_iteration >= 0:
+                pose_result = (pose_model_root / "pose_calibration" /
+                               f"iteration_{args.test_iteration}" / "pose_offsets.npz")
+        else:
+            from r2_gaussian.pose.selection import resolve_test_selection
+            _, pose_result = resolve_test_selection(pose_model_root, args.test_iteration)
         if pose_result is not None and not args.dry_run and not pose_result.exists():
             raise FileNotFoundError(f"Pose result not found: {pose_result}")
         manifest["pose_result"] = pose_result

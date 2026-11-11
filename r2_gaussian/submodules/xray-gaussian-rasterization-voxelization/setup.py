@@ -12,8 +12,13 @@
 from setuptools import setup
 from torch.utils.cpp_extension import CUDAExtension, BuildExtension
 import os
+import sys
+from pathlib import Path
 
 os.path.dirname(os.path.abspath(__file__))
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parents[2]))
+from r2_gaussian.utils.backend_provenance import provenance_build_ext
 
 setup(
     name="xray_gaussian_rasterization_voxelization",
@@ -45,5 +50,5 @@ setup(
             },
         )
     ],
-    cmdclass={"build_ext": BuildExtension},
+    cmdclass={"build_ext": provenance_build_ext(BuildExtension, ROOT)},
 )

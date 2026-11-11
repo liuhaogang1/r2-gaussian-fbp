@@ -326,6 +326,10 @@ def check_projection_metrics(out, split, iteration, expected_views, log, model=N
         raise ValueError(f'Missing rendered metrics: {path}')
     result=dict(split=split,n_views=count,metrics=str(path))
     for metric in ('psnr','ssim'):
+        if metric == 'psnr':
+            from r2_gaussian.utils.metric_report import psnr_report_summary
+            result[metric] = psnr_report_summary(values, count)
+            continue
         scalar=np.asarray(values[f'{metric}_2d'],dtype=float)
         per_view=np.asarray(values[f'{metric}_2d_projs'],dtype=float)
         if scalar.shape!=() or per_view.shape!=(count,) or not np.isfinite(scalar).all() or not np.isfinite(per_view).all():

@@ -2,6 +2,7 @@ import os
 import sys
 import os.path as osp
 import numpy as np
+from pathlib import Path
 
 sys.path.append("./")
 from r2_gaussian.gaussian.gaussian_model import GaussianModel
@@ -46,15 +47,17 @@ def initialize_gaussian(gaussians: GaussianModel, args: ModelParams, loaded_iter
         ), f"Cannot find {ply_path} for initialization. Please specify a valid ply_path or generate point cloud with initialize_pcd.py."
 
         print(f"Initialize Gaussians with {osp.basename(ply_path)}")
-        ply_type = ply_path.split(".")[-1]
+        ply_type = Path(ply_path).suffix.lower().lstrip(".")
         if ply_type == "npy":
             point_cloud = np.load(ply_path)
             xyz = point_cloud[:, :3]
             density = point_cloud[:, 3:4]
-        elif ply_type == ".ply":
+        elif ply_type == "ply":
             point_cloud = fetchPly(ply_path)
             xyz = np.asarray(point_cloud.points)
             density = np.asarray(point_cloud.colors[:, :1])
+        else:
+            raise ValueError(f"Unsupported initialization format: {ply_path}; expected .npy or .ply")
 
         gaussians.create_from_pcd(xyz, density, 1.0)
 

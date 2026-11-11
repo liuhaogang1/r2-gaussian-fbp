@@ -122,6 +122,8 @@ def export_volume(gaussians, pipeline, center, full_size, resolution, chunk_size
                     pipeline,
                 )["vol"]
                 block = t2a(result).astype(dtype, copy=False)
+                if not np.isfinite(block).all():
+                    raise ValueError(f"Export contains NaN/Inf or overflows {dtype}; use float32 and inspect model values")
             out[
                 start[0] : stop[0],
                 start[1] : stop[1],

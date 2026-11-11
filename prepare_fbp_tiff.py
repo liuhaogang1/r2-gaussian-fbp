@@ -122,6 +122,59 @@ def save_split(output, name, indices, projections, angles):
     return records
 
 
+def resolve_sparse_output(args, output):
+    """Normalize and preflight every sparse-FBP file before any output write."""
+    if args.sparse_views is None:
+        if args.sparse_fbp_output is not None:
+            raise ValueError("--sparse_fbp_output requires --sparse_views")
+        return None
+    if args.preprocess_only:
+        raise ValueError("Sparse FBP cannot be combined with --preprocess_only")
+
+    sparse_output = args.sparse_fbp_output
+    if sparse_output is None:
+        sparse_output = output / f"vol_sparse{args.sparse_views}_fbp.npy"
+    sparse_output = Path(sparse_output)
+    from r2_gaussian.utils.artifact_utils import npy_path
+    sparse_output = npy_path(sparse_output)
+    if not sparse_output.is_absolute():
+        sparse_output = output / sparse_output
+    sparse_output = sparse_output.resolve()
+
+    preview_paths = [
+        (output / f"{sparse_output.stem}_preview_{axis}.png").resolve()
+        for axis in ("x", "y", "z")
+    ] + [(output / f"{sparse_output.stem}_preview.nii.gz").resolve()]
+    sparse_products = [sparse_output, *preview_paths]
+    reserved = {
+        (output / name).resolve() for name in (
+            "proj_preprocessed_all.npy", "angles_all.npy", "angles_unique.npy",
+            "proj_endpoint_pair.npy", "proj_all.npy", "vol_fbp_raw.npy",
+            "vol_fbp.npy", "meta_data.json", "preprocess_meta.json",
+            "vol_fbp_preview_x.png", "vol_fbp_preview_y.png",
+            "vol_fbp_preview_z.png", "vol_fbp_preview.nii.gz",
+            "proj_train", "proj_test",
+        )
+    }
+    output_root = output.resolve()
+    conflicts = [
+        path for path in sparse_products
+        if path.exists()
+        or path == output_root
+        or path in output_root.parents
+        or path in reserved
+        or reserved.intersection(path.parents)
+        or any(parent.exists() and not parent.is_dir() for parent in path.parents)
+    ]
+    if conflicts:
+        first = conflicts[0]
+        raise ValueError(
+            "Sparse FBP output conflicts with an existing or reserved artifact: "
+            f"{first}"
+        )
+    return sparse_output
+
+
 def reconstruct_with_optional_subsample(args, projections, angles, raw_images, flat_field=None):
     """Reconstruct in an optionally coarser geometry than the saved views.
 
@@ -191,6 +244,9 @@ def main(args):
             f"FBP output directory is not fresh: {args.output_dir}. "
             "Use a new empty directory for every independent run."
         )
+    # Validate sparse destinations before stripe diagnostics or any other
+    # preprocessing step can create output files.
+    sparse_output = resolve_sparse_output(args, args.output_dir)
     if args.flat_field and args.projection_glob is None:
         args.projection_glob = "Tomo_*.tiff"
     paths = select_tiff_paths(args.input_dir, args.projection_glob)
@@ -278,6 +334,20 @@ def main(args):
         full_resolution = full_resolution[: len(angles)]
     if len(angles) < 2:
         raise ValueError("At least two projection angles are required")
+    sparse_indices = None
+    if args.sparse_views is not None:
+        if args.sparse_views < 2:
+            raise ValueError("--sparse_views must be at least 2 when enabled")
+        if args.sparse_views > len(angles):
+            raise ValueError(
+                f"--sparse_views={args.sparse_views} exceeds {len(angles)} unique views"
+            )
+        sparse_indices = np.linspace(
+            0, len(angles) - 1, args.sparse_views
+        ).round().astype(np.int64)
+        sparse_indices = np.unique(sparse_indices)
+        if len(sparse_indices) != args.sparse_views:
+            raise ValueError("The uniform sparse-view selection was not unique")
     total_angle = angle_interval * len(angles) if removed_endpoint else float(
         np.rad2deg(angles[-1] - angles[0])
     )
@@ -344,21 +414,7 @@ def main(args):
         off_origin=args.offOrigin,
     )
 
-    sparse_indices = None
-    sparse_output = None
     if args.sparse_views is not None:
-        if args.sparse_views < 2:
-            raise ValueError("--sparse_views must be at least 2 when enabled")
-        if args.sparse_views > len(angles):
-            raise ValueError(
-                f"--sparse_views={args.sparse_views} exceeds {len(angles)} unique views"
-            )
-        sparse_indices = np.linspace(
-            0, len(angles) - 1, args.sparse_views
-        ).round().astype(np.int64)
-        sparse_indices = np.unique(sparse_indices)
-        if len(sparse_indices) != args.sparse_views:
-            raise ValueError("The uniform sparse-view selection was not unique")
         sparse_projections = projections[sparse_indices]
         sparse_angles = angles[sparse_indices]
         sparse_raw = (
@@ -378,16 +434,6 @@ def main(args):
             0.0,
             None,
         )
-        sparse_output = (
-            args.sparse_fbp_output
-            if args.sparse_fbp_output is not None
-            else output / f"vol_sparse{args.sparse_views}_fbp.npy"
-        )
-        sparse_output = Path(sparse_output)
-        from r2_gaussian.utils.artifact_utils import npy_path
-        sparse_output = npy_path(sparse_output)
-        if not sparse_output.is_absolute():
-            sparse_output = output / sparse_output
         sparse_output.parent.mkdir(parents=True, exist_ok=True)
         np.save(sparse_output, sparse_volume)
         save_fbp_preview(

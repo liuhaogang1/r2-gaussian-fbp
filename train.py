@@ -13,6 +13,7 @@ import os
 import os.path as osp
 import csv
 import json
+import math
 import torch
 from random import randint
 import sys
@@ -29,7 +30,8 @@ from r2_gaussian.utils.cfg_utils import load_config
 from r2_gaussian.utils.log_utils import prepare_output_and_logger
 from r2_gaussian.dataset import Scene
 from r2_gaussian.utils.loss_utils import l1_loss, ssim, tv_3d_loss
-from r2_gaussian.utils.image_utils import metric_vol, metric_proj
+from r2_gaussian.utils.image_utils import metric_vol, projection_metric_report
+from r2_gaussian.utils.metric_report import finite_metric_values
 from r2_gaussian.utils.plot_utils import show_two_slice as _show_two_slice
 
 
@@ -406,6 +408,8 @@ def training(
     first_iter = 0
 
     # Set up dataset
+    from r2_gaussian.gaussian.render_query import raster_backend_provenance
+    native_build = raster_backend_provenance(bool(getattr(opt, "pose_enabled", False)))
     scene = Scene(dataset, shuffle=False)
     # The renderer receives this runtime-only flag through PipelineParams.
     pipe.pose_enabled = bool(getattr(opt, "pose_enabled", False))
@@ -506,16 +510,21 @@ def training(
 
     # Set up Gaussians
     gaussians = GaussianModel(scale_bound)
-    initialize_gaussian(gaussians, dataset, None)
     scene.gaussians = gaussians
-    gaussians.training_setup(opt)
+    if checkpoint is None:
+        initialize_gaussian(gaussians, dataset, None)
+        gaussians.training_setup(opt)
     pose_checkpoint_state = None
     pose_optimizer_checkpoint_state = None
     if checkpoint is not None:
         from r2_gaussian.utils.artifact_utils import load_training_checkpoint
         checkpoint_data = load_training_checkpoint(checkpoint)
         if len(checkpoint_data) == 2:
-            model_params, first_iter = checkpoint_data
+            raise ValueError("Unbound legacy Gaussian checkpoint: dataset/geometry cannot be verified; use a bound checkpoint or start a fresh run")
+        elif len(checkpoint_data) == 3:
+            model_params, first_iter, checkpoint_binding = checkpoint_data
+            from r2_gaussian.pose.artifacts import validate_gaussian_checkpoint
+            validate_gaussian_checkpoint(checkpoint_binding, scene, first_iter)
         elif len(checkpoint_data) == 5:
             (
                 model_params,
@@ -531,7 +540,7 @@ def training(
         else:
             raise ValueError(
                 "Unsupported checkpoint format: expected a Gaussian checkpoint "
-                "with 2 entries or a bound pose checkpoint with 5 entries."
+                "with 3 entries or a bound pose checkpoint with 5 entries."
             )
         if pose_checkpoint_state is not None and pose_model is None:
             raise ValueError("Pose-aware checkpoint requires pose_enabled; refusing to discard learned geometry")
@@ -696,6 +705,13 @@ def training(
                 gaussians.max_radii2D[visibility_filter], radii[visibility_filter]
             )
             gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+            # Step while gradients still belong to the live Parameters.
+            if iteration < opt.iterations:
+                gaussians.optimizer.step()
+                gaussians.optimizer.zero_grad(set_to_none=True)
+                if pose_optimizer is not None:
+                    pose_optimizer.step()
+                    pose_optimizer.zero_grad(set_to_none=True)
             if iteration < opt.densify_until_iter:
                 if (
                     iteration > opt.densify_from_iter
@@ -718,12 +734,6 @@ def training(
             # Optimization
             if getattr(opt, "shape_enabled", False):
                 _check_model_finite(gaussians, iteration, "adaptive densification/pruning")
-            if iteration < opt.iterations:
-                gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none=True)
-                if pose_optimizer is not None:
-                    pose_optimizer.step()
-                    pose_optimizer.zero_grad(set_to_none=True)
 
             # Hard actions are checked only at the configured cadence and
             # after the optimizer step, so no live autograd graph references
@@ -752,6 +762,9 @@ def training(
                         pose_optimizer.state_dict() if pose_optimizer is not None else None,
                         pose_metadata(scene, iteration),
                     )
+                else:
+                    from r2_gaussian.pose.artifacts import gaussian_checkpoint_metadata
+                    checkpoint_data += (gaussian_checkpoint_metadata(scene, iteration),)
                 torch.save(
                     checkpoint_data,
                     ckpt_save_path + "/chkpnt" + str(iteration) + ".pth",
@@ -789,6 +802,7 @@ def training(
                 scene,
                 lambda x, y: render(x, y, pipe),
                 queryfunc,
+                projection_data_range=getattr(pipe, "projection_data_range", 0.0) or None,
             )
 
     if pose_model is not None:
@@ -802,6 +816,7 @@ def training(
                 "iteration": opt.iterations,
                 "num_gaussians": final_num_gaussians,
                 "max_num_gaussians": opt.max_num_gaussians,
+                "native_build": native_build,
             },
             summary_file,
             indent=2,
@@ -820,6 +835,7 @@ def training_report(
     scene: Scene,
     renderFunc,
     queryFunc,
+    projection_data_range=None,
 ):
     # Add training statistics
     if tb_writer:
@@ -872,20 +888,14 @@ def training_report(
                         )
                 images = torch.concat(images, 0).permute(1, 2, 0)
                 gt_images = torch.concat(gt_images, 0).permute(1, 2, 0)
-                psnr_2d, psnr_2d_projs = metric_proj(gt_images, images, "psnr")
-                ssim_2d, ssim_2d_projs = metric_proj(gt_images, images, "ssim")
-                eval_dict_2d = {
-                    "psnr_2d": psnr_2d,
-                    "ssim_2d": ssim_2d,
-                    "psnr_2d_projs": psnr_2d_projs,
-                    "ssim_2d_projs": ssim_2d_projs,
-                }
+                eval_dict_2d = projection_metric_report(gt_images, images, data_range=projection_data_range)
+                psnr_2d, ssim_2d = eval_dict_2d["psnr_2d"], eval_dict_2d["ssim_2d"]
                 with open(
                     osp.join(eval_save_path, f"eval2d_{config['name']}.yml"),
                     "w",
                 ) as f:
                     yaml.dump(
-                        eval_dict_2d, f, default_flow_style=False, sort_keys=False
+                        finite_metric_values(eval_dict_2d), f, default_flow_style=False, sort_keys=False
                     )
 
                 if tb_writer:
@@ -897,9 +907,10 @@ def training_report(
                         image_show_2d,
                         global_step=iteration,
                     )
-                    tb_writer.add_scalar(
-                        config["name"] + "/psnr_2d", psnr_2d, iteration
-                    )
+                    if math.isfinite(psnr_2d):
+                        tb_writer.add_scalar(config["name"] + "/psnr_2d", psnr_2d, iteration)
+                    tb_writer.add_scalar(config["name"] + "/perfect_view_count",
+                                         eval_dict_2d["perfect_view_count"], iteration)
                     tb_writer.add_scalar(
                         config["name"] + "/ssim_2d", ssim_2d, iteration
                     )
@@ -915,6 +926,7 @@ def training_report(
             "ssim_3d_x": ssim_3d_axis[0],
             "ssim_3d_y": ssim_3d_axis[1],
             "ssim_3d_z": ssim_3d_axis[2],
+            "volume_metric_version": "all_slices_v2",
         }
         with open(osp.join(eval_save_path, "eval3d.yml"), "w") as f:
             yaml.dump(eval_dict, f, default_flow_style=False, sort_keys=False)

@@ -11,6 +11,7 @@
 
 import os
 import sys
+import math
 import os.path as osp
 from argparse import ArgumentParser, Namespace
 
@@ -36,10 +37,20 @@ class ModelParams(ParamGroup):
 
 
 class PipelineParams(ParamGroup):
-    def __init__(self, parser):
+    def __init__(self, parser, sentinel=False):
         self.compute_cov3D_python = False
         self.debug = False
-        super().__init__(parser, "Pipeline Parameters")
+        self.projection_data_range = 0.0  # 0 selects the evaluation GT global maximum.
+        super().__init__(parser, "Pipeline Parameters", sentinel)
+
+    def extract(self, args):
+        group = super().extract(args)
+        for key, value in vars(self).items():
+            if getattr(group, key, None) is None:
+                setattr(group, key, value)
+        if not math.isfinite(group.projection_data_range) or group.projection_data_range < 0:
+            raise ValueError("projection_data_range must be 0 (automatic) or positive and finite")
+        return group
 
 
 class OptimizationParams(ParamGroup):
@@ -129,21 +140,10 @@ class OptimizationParams(ParamGroup):
 
 def get_combined_args(parser: ArgumentParser):
     cmdlne_string = sys.argv[1:]
-    cfgfile_string = "Namespace()"
     args_cmdline = parser.parse_args(cmdlne_string)
-
-    try:
-        cfgfilepath = osp.join(args_cmdline.model_path, "cfg_args")
-        print("Looking for config file in", cfgfilepath)
-        with open(cfgfilepath) as cfg_file:
-            print("Config file found: {}".format(cfgfilepath))
-            cfgfile_string = cfg_file.read()
-    except TypeError:
-        print("Config file not found at")
-        pass
-    args_cfgfile = eval(cfgfile_string)
-
-    merged_dict = vars(args_cfgfile).copy()
+    from r2_gaussian.utils.config_io import load_saved_config
+    model_path = getattr(args_cmdline, "model_path", None)
+    merged_dict = load_saved_config(model_path) if model_path else {}
     for k, v in vars(args_cmdline).items():
         if v != None:
             merged_dict[k] = v

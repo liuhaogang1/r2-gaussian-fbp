@@ -318,6 +318,10 @@ def main():
         help="Output point cloud. Defaults to <volume_dir>/init_<volume_dir_name>.npy.",
     )
     parser.add_argument("--n_points", type=int, default=50000)
+    parser.add_argument("--metadata", type=Path, default=None,
+                        help="Geometry for this volume; required for external training volumes without adjacent metadata.")
+    parser.add_argument("--allow_unit_cube", action="store_true",
+                        help="Explicitly use centered [-1,1]^3 coordinates for a standalone volume without metadata.")
     parser.add_argument("--density_thresh", type=float, default=0.05)
     parser.add_argument("--density_rescale", type=float, default=0.15)
     parser.add_argument(
@@ -399,10 +403,21 @@ def main():
     volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
     volume = np.clip(volume, 0.0, None)
 
+    scanner_dir = args.dataset.resolve() if args.use_train_fbp else volume_path.parent
+    metadata_path = (args.metadata or scanner_dir / "meta_data.json").resolve()
+    if args.use_train_fbp and metadata_path != (scanner_dir / "meta_data.json").resolve():
+        raise ValueError("Train-view FBP must use the same dataset metadata for reconstruction and initialization")
+    scanner = None
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        validate_physical_dataset(metadata)
+        scanner = metadata["scanner"]
+    elif args.metadata is not None or not args.allow_unit_cube:
+        raise ValueError("Missing initialization geometry: provide --metadata, or explicitly --allow_unit_cube for a standalone unit-cube volume")
+
     if args.denoise:
         from scripts.init_denoise import check_output_paths, denoise_volume, load_scanner
-        scanner_dir = args.dataset.resolve() if args.use_train_fbp else volume_path.parent
-        denoise_metadata = scanner_dir / "meta_data.json"
+        denoise_metadata = metadata_path
         denoise_scanner = load_scanner(denoise_metadata, volume.shape)
         denoise_dir = (args.denoise_output_dir or volume_path.parent / "init_denoise").resolve()
         args.output = (args.output or denoise_dir / "init_points.npy").resolve()
@@ -445,13 +460,6 @@ def main():
 
     rng = np.random.default_rng(args.seed)
     selected = indices[rng.choice(len(indices), args.n_points, replace=False)]
-    scanner_dir = args.dataset.resolve() if args.use_train_fbp else volume_path.parent
-    metadata_path = scanner_dir / "meta_data.json"
-    scanner = None
-    if metadata_path.exists():
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        validate_physical_dataset(metadata)
-        scanner = metadata["scanner"]
     positions = initialization_positions(selected, volume.shape, scanner)
     densities = volume[tuple(selected.T)] * args.density_rescale
     point_cloud = np.concatenate([positions, densities[:, None]], axis=1).astype(np.float32)
@@ -462,6 +470,9 @@ def main():
     output = npy_path(output)
     if output.resolve() == volume_path.resolve():
         raise ValueError('Initialization point output must not overwrite its source volume')
+    if (not args.denoise and output.resolve() != canonical_output.resolve()
+            and canonical_output.resolve() == volume_path.resolve()):
+        raise ValueError("Canonical initialization alias would overwrite its source volume; rename the source volume")
     output.parent.mkdir(parents=True, exist_ok=True)
     np.save(output, point_cloud)
     print(f"Saved {point_cloud.shape[0]} points to {output}")

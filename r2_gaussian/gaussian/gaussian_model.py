@@ -559,7 +559,10 @@ class GaussianModel:
         self.prune_points(prune)
         return int(selected.shape[0])
 
-    def densify_and_split(self, grads, grad_threshold, densify_scale_threshold, N=2):
+    def densify_and_split(self, grads, grad_threshold, densify_scale_threshold, N=2,
+                          max_new_points=None):
+        if isinstance(N, bool) or not isinstance(N, int) or N < 2:
+            raise ValueError("Densification split N must be an integer >= 2")
         n_init_points = self.get_xyz.shape[0]
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
@@ -569,6 +572,9 @@ class GaussianModel:
             selected_pts_mask,
             torch.max(self.get_scaling, dim=1).values > densify_scale_threshold,
         )
+        if max_new_points is not None:
+            selected_pts_mask = self._limit_densification(
+                selected_pts_mask, padded_grad, max_new_points // (N - 1))
 
         stds = self.get_scaling[selected_pts_mask].repeat(N, 1)
         means = torch.zeros((stds.size(0), 3), device="cuda")
@@ -609,7 +615,22 @@ class GaussianModel:
         )
         self.prune_points(prune_filter)
 
-    def densify_and_clone(self, grads, grad_threshold, densify_scale_threshold):
+    @staticmethod
+    def _limit_densification(mask, scores, limit):
+        if (scores.ndim not in (1, 2) or (scores.ndim == 2 and scores.shape[1] != 1)
+                or scores.shape[0] != mask.shape[0]):
+            raise ValueError("Densification scores must contain one scalar per Gaussian: [N] or [N,1]")
+        candidates = torch.nonzero(mask, as_tuple=False).flatten()
+        if candidates.numel() <= limit:
+            return mask
+        result = torch.zeros_like(mask)
+        if limit > 0:
+            chosen = torch.topk(scores.reshape(-1)[candidates], int(limit)).indices
+            result[candidates[chosen]] = True
+        return result
+
+    def densify_and_clone(self, grads, grad_threshold, densify_scale_threshold,
+                          max_new_points=None):
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(
             torch.norm(grads, dim=-1) >= grad_threshold, True, False
@@ -618,6 +639,8 @@ class GaussianModel:
             selected_pts_mask,
             torch.max(self.get_scaling, dim=1).values <= densify_scale_threshold,
         )
+        if max_new_points is not None:
+            selected_pts_mask = self._limit_densification(selected_pts_mask, grads, max_new_points)
 
         new_xyz = self._xyz[selected_pts_mask]
         # new_densities = self._density[selected_pts_mask]
@@ -656,8 +679,12 @@ class GaussianModel:
             if not max_num_gaussians or (
                 max_num_gaussians and grads.shape[0] < max_num_gaussians
             ):
-                self.densify_and_clone(grads, max_grad, densify_scale_threshold)
-                self.densify_and_split(grads, max_grad, densify_scale_threshold)
+                remaining = lambda: (None if not max_num_gaussians else
+                                     max(0, max_num_gaussians - self.get_xyz.shape[0]))
+                self.densify_and_clone(grads, max_grad, densify_scale_threshold,
+                                       max_new_points=remaining())
+                self.densify_and_split(grads, max_grad, densify_scale_threshold,
+                                       max_new_points=remaining())
 
         # Prune gaussians with too small density
         prune_mask = (self.get_density < min_density).squeeze()

@@ -50,6 +50,7 @@ def main(args):
     run([
         sys.executable, str(ROOT / "init_from_fbp.py"),
         "--volume", str(init_volume), "--output", str(init_output),
+        "--metadata", str(dataset / "meta_data.json"),
         "--n_points", str(args.n_points), "--density_thresh", str(args.density_thresh),
         "--density_rescale", str(args.density_rescale),
         "--normalize_percentile", str(args.normalize_percentile),

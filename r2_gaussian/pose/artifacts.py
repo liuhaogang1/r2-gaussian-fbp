@@ -23,6 +23,16 @@ def pose_metadata(scene, iteration):
             "base_angles": np.asarray([float(c.angle) for c in scene.train_cameras])}
 
 
+def gaussian_checkpoint_metadata(scene, iteration):
+    return {"binding_version": 1, "model_iteration": int(iteration),
+            "dataset_identity": scene_identity(scene)}
+
+
+def validate_gaussian_checkpoint(binding, scene, iteration):
+    if binding != gaussian_checkpoint_metadata(scene, iteration):
+        raise ValueError("Gaussian checkpoint does not match this dataset, geometry, or iteration")
+
+
 def _validate_binding(data, scene, iteration):
     required = {"binding_version", "model_iteration", "dataset_identity",
                 "scanner_mode", "image_ids", "base_angles"}

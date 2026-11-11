@@ -258,10 +258,18 @@ def collect_metrics(case):
     ):
         values = yaml.safe_load((test_dir / filename).read_text(encoding="utf-8"))
         for source, target in mapping.items():
+            if source == "psnr_2d" and values[source] is None:
+                if values.get("psnr_2d_status") != "perfect":
+                    raise ValueError("Missing PSNR without a perfect-match status")
+                result[target] = "perfect"
+                continue
             value = float(values[source])
             # Perfect fits can produce inf PSNR; keep JSON valid and preserve
             # that result in the CSV instead of marking the trial as failed.
             result[target] = value if np.isfinite(value) else str(value)
+        for key in ("projection_metric_version", "projection_data_range", "data_range_source", "volume_metric_version"):
+            if key in values:
+                result[key] = values[key]
     status = json.loads((test_dir / "evaluation_status.json").read_text(encoding="utf-8"))
     if status.get("status") != "completed" or status.get("iteration") != case["iteration"]:
         raise ValueError("Final evaluation status/iteration mismatch")

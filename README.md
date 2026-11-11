@@ -28,6 +28,13 @@ r2_gaussian/                       R2-Gaussian 核心实现
 
 建议使用已有的 CUDA/PyTorch 环境，再安装 `requirements.txt` 中的 Python 依赖。TIGRE、SimpleITK 和 TomoPy 需要在当前环境中可导入；如果已有旋转中心 JSON，可以跳过 TomoPy 中心扫描。
 
+训练、评估和体积导出需要从当前检出的源码构建 CUDA 扩展。在项目 Python 环境中进入
+`r2_gaussian/submodules/xray-gaussian-rasterization-voxelization`，运行
+`python setup.py build_ext --inplace`。使用位姿校准时，在
+`r2_gaussian/submodules/self-xray-gaussian-rasterization-voxelization` 中也运行同一命令。
+构建会在扩展旁生成加载时需要的 `.build.json`。Windows 下请在已加载 MSVC 和 CUDA 的开发终端中构建。
+首次训练前，在 `r2_gaussian/submodules/simple-knn` 中也运行同一命令，构建点云初始化依赖。
+
 ### 可选 TomoPy 条纹校正
 
 条纹校正默认关闭；不配置 `stripe_correction` 时，预处理保持原流程。显式配置后，管线会在原始探测器分辨率、空间降采样之前，对完整投影堆栈调用 `tomopy.remove_all_stripe`，并把同一份结果用于中心估计、FBP、训练投影和测试投影：
