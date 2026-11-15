@@ -129,6 +129,9 @@ train:
 留出视角评估应使用由训练视角生成的参考体。
 
 管线命令行使用 `--train_reference_enabled`、`--train_reference_method block` 等参数。
+切片模式可通过 `--train_reference_densify` 对参与体素化的高斯累计切片损失的三维中心梯度，
+用于分裂和克隆。将 `--train_densify_until_iter` 设为正数以运行增密与剪枝，
+使用 `--train_densify_grad_threshold` 设置梯度阈值。训练日志分别记录克隆、分裂和剪枝数量。
 直接运行 `train.py` 时去掉 `train_` 前缀，并显式设置 `--reference_path`。
 旧 `slice_*` 配置中的开关、路径、方向、时间和比例可迁移到新字段。
 旧比例使用百分数，例如 `slice_filter_ratio: 10` 迁移为 `0.1`。
@@ -137,11 +140,12 @@ train:
 ## 可选：抑制异常形状 Gaussian
 
 形状抑制默认关闭。关闭时不计算形状损失、不追踪异常状态，也不改变旧检查点的
-保存格式。开启后，训练只惩罚超过阈值的细长或扁平 Gaussian；可选的硬处理在多个
+保存格式。针状项使用最长轴与最短轴的比值，软阈值可设为 1。片状项使用中间轴与最短轴的比值。
+训练惩罚超过相应阈值的 Gaussian；可选的硬处理在多个
 检查周期持续异常后执行。建议先只启用软惩罚并检查训练指标，再尝试修复或删除；
 `split` 是实验性操作，可能增加点数并改变局部拟合。
 
-例如只抑制细长 Gaussian，并在训练过程中渐增正则权重：
+例如只启用针状软惩罚，并在训练过程中渐增正则权重：
 
 ```bash
 python train.py -s /path/to/dataset -m /path/to/model \

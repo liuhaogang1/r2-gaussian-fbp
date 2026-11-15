@@ -1014,7 +1014,10 @@ def validate_args(args: argparse.Namespace) -> None:
         if not (getattr(args, "train_shape_needle_enabled", SHAPE_DEFAULTS["train_shape_needle_enabled"])
                 or getattr(args, "train_shape_sheet_enabled", SHAPE_DEFAULTS["train_shape_sheet_enabled"])):
             raise ValueError("Enable train_shape_needle_enabled or train_shape_sheet_enabled")
-        for name in ("needle_threshold", "sheet_threshold", "hard_needle_ratio", "hard_sheet_ratio"):
+        needle_threshold = float(shape("needle_threshold"))
+        if not math.isfinite(needle_threshold) or needle_threshold < 1.0:
+            raise ValueError("train_shape_needle_threshold must be finite and at least 1")
+        for name in ("sheet_threshold", "hard_needle_ratio", "hard_sheet_ratio"):
             value = float(shape(name))
             if not (value > 1.0):
                 raise ValueError(f"train_shape_{name} must be greater than 1")

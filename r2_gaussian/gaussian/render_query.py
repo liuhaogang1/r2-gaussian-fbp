@@ -76,6 +76,8 @@ def query(
     sVoxel,
     pipe: PipelineParams,
     scaling_modifier=1.0,
+    *,
+    track_position_grad=False,
 ):
     """
     Query a volume with voxelization.
@@ -104,6 +106,10 @@ def query(
     voxelizer = GaussianVoxelizer(voxel_settings=voxel_settings)
 
     means3D = pc.get_xyz
+    if track_position_grad:
+        # Keep the gradient from this query separate from other loss terms.
+        means3D = means3D.view_as(means3D)
+        means3D.retain_grad()
     density = pc.get_density
 
     scales = None
@@ -123,10 +129,13 @@ def query(
         cov3D_precomp=cov3D_precomp,
     )
 
-    return {
+    result = {
         "vol": vol_pred,
         "radii": radii,
     }
+    if track_position_grad:
+        result["positions"] = means3D
+    return result
 
 
 def query_points(

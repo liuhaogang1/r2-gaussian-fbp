@@ -50,10 +50,10 @@ def build_parser():
 
 
 def validate_args(args):
-    for name in ("needle_threshold", "sheet_threshold"):
-        value = getattr(args, name)
-        if not np.isfinite(value) or value <= 1:
-            raise ValueError(f"--{name} must be finite and greater than 1")
+    if not np.isfinite(args.needle_threshold) or args.needle_threshold < 1:
+        raise ValueError("--needle_threshold must be finite and at least 1")
+    if not np.isfinite(args.sheet_threshold) or args.sheet_threshold <= 1:
+        raise ValueError("--sheet_threshold must be finite and greater than 1")
     for name in ("lambda_needle", "lambda_sheet"):
         value = getattr(args, name)
         if not np.isfinite(value) or value < 0:

@@ -6,6 +6,7 @@ import warnings
 
 REFERENCE_DEFAULTS = {
     "reference_enabled": False,
+    "reference_densify": False,
     "reference_method": "slice",
     "reference_path": None,
     "reference_loss": "l1_grad",
@@ -44,7 +45,7 @@ RETIRED_REFERENCE_OPTIONS = {
 def add_reference_arguments(parser, prefix=""):
     for name, default in REFERENCE_DEFAULTS.items():
         options = {"type": type(default) if default is not None else str}
-        if name == "reference_enabled":
+        if isinstance(default, bool):
             options = {"action": argparse.BooleanOptionalAction}
         elif name in ("reference_block_size", "reference_block_stride"):
             options = {"type": int, "nargs": 3, "metavar": ("X", "Y", "Z")}
@@ -96,6 +97,14 @@ def validate_reference_options(options, prefix=""):
               for name, default in REFERENCE_DEFAULTS.items()}
     if not isinstance(values["reference_enabled"], bool):
         raise ValueError("reference_enabled must be a boolean")
+    if not isinstance(values["reference_densify"], bool):
+        raise ValueError("reference_densify must be a boolean")
+    if values["reference_densify"]:
+        if not values["reference_enabled"] or values["reference_method"] != "slice":
+            raise ValueError("reference_densify requires enabled slice supervision")
+        threshold = options.get(prefix + "densify_grad_threshold", 5e-5)
+        if not math.isfinite(threshold) or threshold <= 0:
+            raise ValueError("reference_densify requires a finite positive densify_grad_threshold")
     if not values["reference_enabled"]:
         return values
     if options.get(prefix + "pose_enabled", False):

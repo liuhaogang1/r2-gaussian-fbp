@@ -65,7 +65,7 @@ def _shape_regularization(gaussians, opt, iteration):
         return zero, {}
     scales = gaussians.get_scaling
     ordered = torch.sort(scales, dim=1).values.clamp_min(1e-12)
-    needle_ratio = ordered[:, 2] / ordered[:, 1]
+    needle_ratio = ordered[:, 2] / ordered[:, 0]
     sheet_ratio = ordered[:, 1] / ordered[:, 0]
     excess_needle = torch.relu(
         torch.log(needle_ratio) - np.log(float(getattr(opt, "shape_needle_threshold", 10.0)))
@@ -94,8 +94,10 @@ def _shape_regularization(gaussians, opt, iteration):
 def _validate_shape_options(opt):
     if not getattr(opt, "shape_enabled", False):
         return
-    for name in ("shape_needle_threshold", "shape_sheet_threshold",
-                 "shape_hard_needle_ratio", "shape_hard_sheet_ratio"):
+    needle_threshold = float(getattr(opt, "shape_needle_threshold", 0.0))
+    if not np.isfinite(needle_threshold) or needle_threshold < 1.0:
+        raise ValueError("shape_needle_threshold must be finite and at least 1")
+    for name in ("shape_sheet_threshold", "shape_hard_needle_ratio", "shape_hard_sheet_ratio"):
         value = float(getattr(opt, name, 0.0))
         if not np.isfinite(value) or value <= 1.0:
             raise ValueError(f"{name} must be finite and greater than 1")
@@ -152,7 +154,7 @@ def _shape_hard_process(gaussians, opt, iteration):
         gaussians.enable_shape_tracking()
     scales = gaussians.get_scaling.detach().clamp_min(1e-12)
     ordered = torch.sort(scales, dim=1).values
-    needle = ordered[:, 2] / ordered[:, 1] > float(getattr(opt, "shape_hard_needle_ratio", 50.0))
+    needle = ordered[:, 2] / ordered[:, 0] > float(getattr(opt, "shape_hard_needle_ratio", 50.0))
     sheet = ordered[:, 1] / ordered[:, 0] > float(getattr(opt, "shape_hard_sheet_ratio", 50.0))
     severe = (needle & bool(getattr(opt, "shape_needle_enabled", True))) | (
         sheet & bool(getattr(opt, "shape_sheet_enabled", True))
@@ -471,11 +473,14 @@ def training(
         gaussians.enable_shape_tracking()
 
     reference_supervision = prepare_reference_supervision(opt, scanner_cfg)
+    reference_densify = getattr(opt, "reference_densify", False)
     if reference_supervision is not None:
         print(f"Reference supervision: {reference_supervision.method} from {reference_supervision.path}")
         if reference_supervision.method == "block":
             print(f"Reference block candidates: {len(reference_supervision.block_starts)}, "
                   f"sampling={opt.reference_block_sampling}")
+    if reference_densify:
+        print(f"Slice-driven densification: position gradient threshold={opt.densify_grad_threshold:g}")
 
     # Set up loss
     use_tv = opt.lambda_tv > 0
@@ -498,6 +503,7 @@ def training(
         iter_start.record()
         shape_diag = {}
         shape_action_diag = {}
+        reference_query = None
 
         # Update learning rate
         gaussians.update_learning_rate(iteration)
@@ -547,9 +553,11 @@ def training(
         if reference_supervision is not None:
             region = reference_supervision.sample(iteration)
             if region is not None:
-                prediction = query(
-                    gaussians, region.center, region.counts, region.size, pipe
-                )["vol"]
+                reference_query = query(
+                    gaussians, region.center, region.counts, region.size, pipe,
+                    track_position_grad=reference_densify and iteration < opt.densify_until_iter,
+                )
+                prediction = reference_query["vol"]
                 target = torch.from_numpy(region.target.astype(np.float32, copy=True)).to(
                     device=prediction.device, dtype=prediction.dtype
                 )
@@ -597,7 +605,13 @@ def training(
 
         with torch.no_grad():
             # Adaptive control
-            if use_projection:
+            if reference_query is not None and "positions" in reference_query:
+                radius_x, radius_y, radius_z = reference_query["radii"]
+                intersects_slice = (radius_x > 0) & (radius_y > 0) & (radius_z > 0)
+                gaussians.add_densification_stats(
+                    reference_query["positions"], intersects_slice, dimensions=3,
+                )
+            elif use_projection and not reference_densify:
                 visibility_filter = render_pkg["visibility_filter"]
                 gaussians.max_radii2D[visibility_filter] = torch.max(
                     gaussians.max_radii2D[visibility_filter], render_pkg["radii"][visibility_filter]
@@ -610,19 +624,31 @@ def training(
                 if pose_optimizer is not None:
                     pose_optimizer.step()
                     pose_optimizer.zero_grad(set_to_none=True)
-            if use_projection and iteration < opt.densify_until_iter:
-                if (
-                    iteration > opt.densify_from_iter
-                    and iteration % opt.densification_interval == 0
-                ):
-                    gaussians.densify_and_prune(
-                        opt.densify_grad_threshold,
-                        opt.density_min_threshold,
-                        opt.max_screen_size,
-                        max_scale,
-                        opt.max_num_gaussians,
-                        densify_scale_threshold,
-                        bbox,
+            if (
+                (use_projection or reference_densify)
+                and opt.densify_from_iter < iteration < opt.densify_until_iter
+                and iteration % opt.densification_interval == 0
+            ):
+                densification_metrics = {} if reference_densify else None
+                gaussians.densify_and_prune(
+                    opt.densify_grad_threshold,
+                    opt.density_min_threshold,
+                    None if reference_densify else opt.max_screen_size,
+                    max_scale,
+                    opt.max_num_gaussians,
+                    densify_scale_threshold,
+                    bbox,
+                    metrics=densification_metrics,
+                )
+                if densification_metrics is not None:
+                    gaussians.xyz_gradient_accum.zero_()
+                    gaussians.denom.zero_()
+                    tqdm.write(
+                        f"[ITER {iteration}] Slice densification "
+                        f"observed={densification_metrics['observed']} "
+                        f"grad_p99={densification_metrics['grad_p99']:.6g} "
+                        f"cloned={densification_metrics['cloned']} split={densification_metrics['split']} "
+                        f"pruned={densification_metrics['pruned']} gaussians={gaussians.get_xyz.shape[0]}"
                     )
             if gaussians.get_density.shape[0] == 0:
                 raise ValueError(

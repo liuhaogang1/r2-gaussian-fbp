@@ -237,7 +237,7 @@ def shape_statistics(path):
             or not np.isfinite(density).all() or np.any(scales <= 0)):
         raise ValueError(f"Invalid final Gaussian scales/density: {path}")
     ordered = np.sort(scales, axis=1)
-    ratios = {"needle": ordered[:, 2] / ordered[:, 1], "sheet": ordered[:, 1] / ordered[:, 0]}
+    ratios = {"needle": ordered[:, 2] / ordered[:, 0], "sheet": ordered[:, 1] / ordered[:, 0]}
     mass = density * np.prod(scales, axis=1)
     stats = {"num_gaussians": len(scales)}
     for name, ratio in ratios.items():

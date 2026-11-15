@@ -485,16 +485,15 @@ class GaussianModel:
         middle = order[:, 1]
         long = order[:, 2]
         rows = torch.arange(scales.shape[0], device=scales.device)
-        target_middle = scales[rows, short] * float(sheet_threshold)
-        needle = (scales[rows, long] / scales[rows, middle]) > float(needle_threshold)
-        sheet = (scales[rows, middle] / scales[rows, short]) > float(sheet_threshold)
-        new_middle = torch.minimum(scales[rows, middle], target_middle)
-        final_middle = new_middle if sheet_enabled else scales[rows, middle]
-        new_long = torch.minimum(scales[rows, long], final_middle * float(needle_threshold))
-        if needle_enabled:
-            repaired[rows, long] = new_long
+        short_scale = scales[rows, short]
         if sheet_enabled:
-            repaired[rows, middle] = torch.where(sheet, new_middle, scales[rows, middle])
+            target_middle = short_scale * float(sheet_threshold)
+            repaired[rows, middle] = torch.minimum(scales[rows, middle], target_middle)
+        if needle_enabled:
+            max_scale = short_scale * float(needle_threshold)
+            repaired[rows, long] = torch.minimum(scales[rows, long], max_scale)
+            # The old middle axis can otherwise become the new longest axis.
+            repaired[rows, middle] = torch.minimum(repaired[rows, middle], max_scale)
         old_volume = torch.prod(scales, dim=1)
         new_volume = torch.prod(repaired, dim=1).clamp_min(1e-12)
         density = self.get_density.detach()
@@ -670,9 +669,17 @@ class GaussianModel:
         max_num_gaussians,
         densify_scale_threshold,
         bbox=None,
+        *,
+        metrics=None,
     ):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
+        before = self.get_xyz.shape[0]
+        after_clone = before
+        if metrics is not None:
+            observed = grads[self.denom > 0]
+            metrics["observed"] = observed.numel()
+            metrics["grad_p99"] = torch.quantile(observed, 0.99).item() if observed.numel() else 0.0
 
         # Densify Gaussians if Gaussians are fewer than threshold
         if densify_scale_threshold:
@@ -683,11 +690,13 @@ class GaussianModel:
                                      max(0, max_num_gaussians - self.get_xyz.shape[0]))
                 self.densify_and_clone(grads, max_grad, densify_scale_threshold,
                                        max_new_points=remaining())
+                after_clone = self.get_xyz.shape[0]
                 self.densify_and_split(grads, max_grad, densify_scale_threshold,
                                        max_new_points=remaining())
 
         # Prune gaussians with too small density
-        prune_mask = (self.get_density < min_density).squeeze()
+        before_prune = self.get_xyz.shape[0]
+        prune_mask = (self.get_density < min_density).squeeze(-1)
         # Prune gaussians outside the bbox
         if bbox is not None:
             xyz = self.get_xyz
@@ -709,13 +718,22 @@ class GaussianModel:
             big_points_ws = self.get_scaling.max(dim=1).values > max_scale
             prune_mask = torch.logical_or(prune_mask, big_points_ws)
         self.prune_points(prune_mask)
+        if metrics is not None:
+            metrics.update(
+                cloned=after_clone - before,
+                split=before_prune - after_clone,  # Each split replaces one parent with two children.
+                pruned=before_prune - self.get_xyz.shape[0],
+            )
 
         torch.cuda.empty_cache()
 
         return grads
 
-    def add_densification_stats(self, viewspace_point_tensor, update_filter):
+    def add_densification_stats(self, viewspace_point_tensor, update_filter, *, dimensions=2):
+        gradients = viewspace_point_tensor.grad
+        if dimensions == 3:
+            update_filter = update_filter & torch.isfinite(gradients).all(dim=-1)
         self.xyz_gradient_accum[update_filter] += torch.norm(
-            viewspace_point_tensor.grad[update_filter, :2], dim=-1, keepdim=True
+            gradients[update_filter, :dimensions], dim=-1, keepdim=True
         )
         self.denom[update_filter] += 1
