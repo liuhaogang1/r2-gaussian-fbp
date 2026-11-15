@@ -20,11 +20,12 @@ def reorder_tigre_detector_offset(offset_uv, order="vu"):
     raise ValueError("TIGRE detector offset order must be 'uv' or 'vu'")
 
 
-def tigre_detector_offset(offset, order="vu"):
+def tigre_detector_offset(offset, order="uv"):
     """Map physical detector [U,V] offsets to TIGRE's selected axis order.
 
     Projection rows are reversed before TIGRE reconstruction, so V changes
-    sign. The local pytigre build uses VU order: [U,V] becomes [-V,U].
+    sign. The default UV order returns [U,-V]. Pass order="vu" for TIGRE
+    builds that expect [-V,U].
     """
     values = np.asarray(offset, dtype=np.float32)
     if values.shape != (2,) or not np.isfinite(values).all():
