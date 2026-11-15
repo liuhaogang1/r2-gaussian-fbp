@@ -208,6 +208,7 @@ DEFAULTS: dict[str, Any] = {
     "train_rotation_lr_init": 0.001,
     "train_rotation_lr_final": 0.0001,
     "train_rotation_lr_max_steps": 30000,
+    "train_lambda_l1": 1.0,
     "train_lambda_dssim": 0.25,
     "train_lambda_tv": 0.05,
     "train_tv_vol_size": 32,
@@ -462,7 +463,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("position_lr_max_steps", int), ("density_lr_init", float), ("density_lr_final", float),
         ("density_lr_max_steps", int), ("scaling_lr_init", float), ("scaling_lr_final", float),
         ("scaling_lr_max_steps", int), ("rotation_lr_init", float), ("rotation_lr_final", float),
-        ("rotation_lr_max_steps", int), ("lambda_dssim", float), ("lambda_tv", float),
+        ("rotation_lr_max_steps", int), ("lambda_l1", float), ("lambda_dssim", float), ("lambda_tv", float),
         ("tv_vol_size", int), ("projection_data_range", float), ("density_min_threshold", float), ("densification_interval", int),
         ("densify_from_iter", int), ("densify_until_iter", int), ("densify_grad_threshold", float),
         ("densify_scale_threshold", float), ("max_screen_size", float), ("max_scale", float),
@@ -606,6 +607,9 @@ def resolve_args(parsed: argparse.Namespace) -> argparse.Namespace:
         merge_loaded(load_yaml(pipeline_config), pipeline_config)
     explicit.update(vars(parsed))
     values.update(migrate_reference_options(explicit, prefix="train_"))
+    if "train_lambda_l1" not in explicit:
+        # Let train.py supply its default for existing pipeline configurations.
+        values.pop("train_lambda_l1")
     for key in ("init_denoise", "init_denoise_save_nii"):
         if key in values and not isinstance(values[key], bool):
             raise ValueError(f"{key} must be a boolean")
@@ -845,7 +849,7 @@ def write_train_config(args: argparse.Namespace, path: Path, source: Path, model
         "position_lr_init", "position_lr_final", "position_lr_max_steps", "density_lr_init",
         "density_lr_final", "density_lr_max_steps", "scaling_lr_init", "scaling_lr_final",
         "scaling_lr_max_steps", "rotation_lr_init", "rotation_lr_final", "rotation_lr_max_steps",
-        "lambda_dssim", "lambda_tv", "tv_vol_size", "density_min_threshold",
+        "lambda_l1", "lambda_dssim", "lambda_tv", "tv_vol_size", "density_min_threshold",
         "densification_interval", "densify_from_iter", "densify_until_iter", "densify_grad_threshold",
         "densify_scale_threshold", "max_screen_size", "max_scale", "max_num_gaussians",
         "shape_enabled", "shape_needle_enabled", "shape_sheet_enabled",
@@ -898,7 +902,7 @@ def build_train_command(args: argparse.Namespace, init_output: Path, train_confi
         "data_device", "scale_min", "scale_max", "iterations", "projection_data_range", "position_lr_init", "position_lr_final",
         "position_lr_max_steps", "density_lr_init", "density_lr_final", "density_lr_max_steps",
         "scaling_lr_init", "scaling_lr_final", "scaling_lr_max_steps", "rotation_lr_init",
-        "rotation_lr_final", "rotation_lr_max_steps", "lambda_dssim", "lambda_tv", "tv_vol_size",
+        "rotation_lr_final", "rotation_lr_max_steps", "lambda_l1", "lambda_dssim", "lambda_tv", "tv_vol_size",
         "density_min_threshold", "densification_interval", "densify_from_iter", "densify_until_iter",
         "densify_grad_threshold", "densify_scale_threshold",
         "max_num_gaussians", "pose_mode", "parallel_angle_max_deg", "parallel_detector_shift_max_pixel",
@@ -998,6 +1002,9 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("init_fbp_nii_output requires init_visualize_fbp_nii")
     if args.init_visualize_fbp_nii and args.init_source != "train_fbp":
         raise ValueError("init_visualize_fbp_nii requires init_source=train_fbp")
+    lambda_l1 = getattr(args, "train_lambda_l1", DEFAULTS["train_lambda_l1"])
+    if not math.isfinite(lambda_l1) or lambda_l1 < 0:
+        raise ValueError("train_lambda_l1 must be finite and non-negative")
     if args.train_pose_mode not in {"auto", "parallel", "cone"}:
         raise ValueError("train_pose_mode must be auto, parallel, or cone")
     if args.train_pose_enabled and args.train_pose_mode != "auto" and args.train_pose_mode != args.fbp_mode:

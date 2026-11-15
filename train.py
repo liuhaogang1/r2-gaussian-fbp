@@ -306,6 +306,10 @@ def training(
     checkpoint,
 ):
     first_iter = 0
+    lambda_l1 = getattr(opt, "lambda_l1", 1.0)
+    if not math.isfinite(lambda_l1) or lambda_l1 < 0:
+        raise ValueError("lambda_l1 must be finite and non-negative")
+    use_projection = lambda_l1 > 0 or opt.lambda_dssim > 0
 
     # Set up dataset
     from r2_gaussian.gaussian.render_query import raster_backend_provenance
@@ -498,30 +502,20 @@ def training(
         # Update learning rate
         gaussians.update_learning_rate(iteration)
 
-        # Get one camera for training
-        if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
-        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
-
-        # Render X-ray projection
-        render_pkg = render(viewpoint_cam, gaussians, pipe)
-        image, viewspace_point_tensor, visibility_filter, radii = (
-            render_pkg["render"],
-            render_pkg["viewspace_points"],
-            render_pkg["visibility_filter"],
-            render_pkg["radii"],
-        )
-
-        # Compute loss
-        gt_image = viewpoint_cam.original_image.cuda()
         loss = {"total": 0.0}
-        render_loss = l1_loss(image, gt_image)
-        loss["render"] = render_loss
-        loss["total"] += loss["render"]
-        if opt.lambda_dssim > 0:
-            loss_dssim = 1.0 - ssim(image, gt_image)
-            loss["dssim"] = loss_dssim
-            loss["total"] = loss["total"] + opt.lambda_dssim * loss_dssim
+        if use_projection:
+            if not viewpoint_stack:
+                viewpoint_stack = scene.getTrainCameras().copy()
+            viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
+            render_pkg = render(viewpoint_cam, gaussians, pipe)
+            image = render_pkg["render"]
+            gt_image = viewpoint_cam.original_image.cuda()
+            if lambda_l1 > 0:
+                loss["render"] = l1_loss(image, gt_image)
+                loss["total"] += lambda_l1 * loss["render"]
+            if opt.lambda_dssim > 0:
+                loss["dssim"] = 1.0 - ssim(image, gt_image)
+                loss["total"] += opt.lambda_dssim * loss["dssim"]
         # 3D TV loss
         if use_tv:
             # Randomly get the tiny volume center
@@ -594,6 +588,8 @@ def training(
                 + pose_weight * loss_pose
             )
 
+        if not torch.is_tensor(loss["total"]) or not loss["total"].requires_grad:
+            raise ValueError(f"Iteration {iteration} has no differentiable loss. Check loss weights and the reference schedule.")
         loss["total"].backward()
 
         iter_end.record()
@@ -601,10 +597,12 @@ def training(
 
         with torch.no_grad():
             # Adaptive control
-            gaussians.max_radii2D[visibility_filter] = torch.max(
-                gaussians.max_radii2D[visibility_filter], radii[visibility_filter]
-            )
-            gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+            if use_projection:
+                visibility_filter = render_pkg["visibility_filter"]
+                gaussians.max_radii2D[visibility_filter] = torch.max(
+                    gaussians.max_radii2D[visibility_filter], render_pkg["radii"][visibility_filter]
+                )
+                gaussians.add_densification_stats(render_pkg["viewspace_points"], visibility_filter)
             # Step while gradients still belong to the live Parameters.
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
@@ -612,7 +610,7 @@ def training(
                 if pose_optimizer is not None:
                     pose_optimizer.step()
                     pose_optimizer.zero_grad(set_to_none=True)
-            if iteration < opt.densify_until_iter:
+            if use_projection and iteration < opt.densify_until_iter:
                 if (
                     iteration > opt.densify_from_iter
                     and iteration % opt.densification_interval == 0

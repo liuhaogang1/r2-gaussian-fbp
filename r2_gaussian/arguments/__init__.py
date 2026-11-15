@@ -71,6 +71,7 @@ class OptimizationParams(ParamGroup):
         self.rotation_lr_init = 0.001
         self.rotation_lr_final = 0.0001
         self.rotation_lr_max_steps = 30_000
+        self.lambda_l1 = 1.0
         self.lambda_dssim = 0.25
         self.lambda_tv = 0.05
         self.tv_vol_size = 32
