@@ -156,7 +156,7 @@ def comparison_images(output, rows, fractions):
                             plane = np.take(volume, index, axis=axis)
                             scale = high - low if high > low else 1.0
                             gray = np.round(np.clip((plane - low) / scale, 0, 1) * 255).astype(np.uint8)
-                            tile = Image.fromarray(gray).convert("RGB")
+                            tile = Image.fromarray(np.flipud(gray.T)).convert("RGB")
                             tile.thumbnail((cell, cell))
                             sheet.paste(tile, (x + (cell - tile.width) // 2, y + label + (cell - tile.height) // 2))
                         del volume

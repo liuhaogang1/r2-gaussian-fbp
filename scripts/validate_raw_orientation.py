@@ -37,10 +37,10 @@ def save_slices(volume, prefix):
     import matplotlib.pyplot as plt
 
     volume = normalize(volume)
-    center = [int(size // 2) for size in volume.shape]
-    plt.imsave(str(prefix.with_name(prefix.name + "_x.png")), volume[center[0], :, :].T, cmap="gray")
-    plt.imsave(str(prefix.with_name(prefix.name + "_y.png")), volume[:, center[1], :].T, cmap="gray")
-    plt.imsave(str(prefix.with_name(prefix.name + "_z.png")), volume[:, :, center[2]].T, cmap="gray")
+    for axis, name in enumerate("xyz"):
+        plane = np.take(volume, volume.shape[axis] // 2, axis=axis)
+        plt.imsave(prefix.with_name(f"{prefix.name}_{name}.png"), plane.T,
+                   origin="lower", cmap="gray")
 
 
 def parse_args():

@@ -152,6 +152,7 @@ def show_three_volume(
     title3="3",
     vmax=None,
 ):
+    """Compare Z slices of XYZ volumes with X rightward and Y upward."""
     diff2 = np.abs(volume1 - volume2)
     diff3 = np.abs(volume1 - volume3)
 
@@ -165,39 +166,43 @@ def show_three_volume(
     error_max = np.max([diff2.max(), diff3.max()])
     # Display the initial slices
     img1 = ax[0, 0].imshow(
-        volume1[:, :, initial_slice],
+        volume1[:, :, initial_slice].T,
+        origin="lower",
         cmap=cmap,
         vmin=0.0,
         vmax=volume1.max() if vmax is None else vmax,
     )
     ax[0, 0].title.set_text(title1)
     img2 = ax[0, 1].imshow(
-        volume2[:, :, initial_slice],
+        volume2[:, :, initial_slice].T,
+        origin="lower",
         cmap=cmap,
         vmin=0.0,
         vmax=volume2.max() if vmax is None else vmax,
     )
     ax[0, 1].title.set_text(title2)
     img3 = ax[0, 2].imshow(
-        diff2[:, :, initial_slice], cmap=cmap, vmin=0.0, vmax=error_max
+        diff2[:, :, initial_slice].T, origin="lower", cmap=cmap, vmin=0.0, vmax=error_max
     )
     ax[0, 2].title.set_text("error")
     img4 = ax[1, 0].imshow(
-        volume1[:, :, initial_slice],
+        volume1[:, :, initial_slice].T,
+        origin="lower",
         cmap=cmap,
         vmin=0.0,
         vmax=volume1.max() if vmax is None else vmax,
     )
     ax[1, 0].title.set_text(title1)
     img5 = ax[1, 1].imshow(
-        volume3[:, :, initial_slice],
+        volume3[:, :, initial_slice].T,
+        origin="lower",
         cmap=cmap,
         vmin=0.0,
         vmax=volume3.max() if vmax is None else vmax,
     )
     ax[1, 1].title.set_text(title3)
     img6 = ax[1, 2].imshow(
-        diff3[:, :, initial_slice], cmap=cmap, vmin=0.0, vmax=error_max
+        diff3[:, :, initial_slice].T, origin="lower", cmap=cmap, vmin=0.0, vmax=error_max
     )
     ax[1, 2].title.set_text("error")
 
@@ -230,12 +235,12 @@ def show_three_volume(
     # Update function for the slider
     def update(val):
         slice_index = int(slice_slider.val)
-        img1.set_array(volume1[:, :, slice_index])
-        img2.set_array(volume2[:, :, slice_index])
-        img3.set_array(diff2[:, :, slice_index])
-        img4.set_array(volume1[:, :, slice_index])
-        img5.set_array(volume3[:, :, slice_index])
-        img6.set_array(diff3[:, :, slice_index])
+        img1.set_array(volume1[:, :, slice_index].T)
+        img2.set_array(volume2[:, :, slice_index].T)
+        img3.set_array(diff2[:, :, slice_index].T)
+        img4.set_array(volume1[:, :, slice_index].T)
+        img5.set_array(volume3[:, :, slice_index].T)
+        img6.set_array(diff3[:, :, slice_index].T)
         fig.canvas.draw_idle()
 
     # Connect the slider to the update function
@@ -257,6 +262,7 @@ def show_two_slice(
     save=False,
     no_diff=False,
 ):
+    """Compare two images whose row zero is at the top."""
     if save:
         matplotlib.use("Agg")
     else:
@@ -273,6 +279,7 @@ def show_two_slice(
 
     img1 = ax[0].imshow(
         slice1,
+        origin="upper",
         cmap=cmap,
         vmin=slice1.min() if vmin is None else vmin,
         vmax=slice1.max() if vmax is None else vmax,
@@ -283,6 +290,7 @@ def show_two_slice(
 
     img2 = ax[1].imshow(
         slice2,
+        origin="upper",
         cmap=cmap,
         vmin=slice2.min() if vmin is None else vmin,
         vmax=slice2.max() if vmax is None else vmax,
@@ -292,7 +300,7 @@ def show_two_slice(
     cbar2 = fig.colorbar(img2, cax=cax1)
 
     if not no_diff:
-        img3 = ax[2].imshow(diff, cmap=cmap, vmin=0.0)
+        img3 = ax[2].imshow(diff, origin="upper", cmap=cmap, vmin=0.0)
         ax[2].title.set_text("error")
         cax2 = make_axes_locatable(ax[2]).append_axes("right", size="5%", pad=0.1)
         cbar3 = fig.colorbar(img3, cax=cax2)
@@ -314,6 +322,7 @@ def show_two_slice(
 
 
 def show_one_volume(volume1, cmap="viridis"):
+    """Show Z slices of an XYZ volume with X rightward and Y upward."""
     if torch.is_tensor(volume1):
         volume1 = t2a(volume1)
     # Create a figure and axis
@@ -325,7 +334,7 @@ def show_one_volume(volume1, cmap="viridis"):
 
     # Display the initial slices
     img1 = ax.imshow(
-        volume1[:, :, initial_slice], cmap=cmap, vmin=0.0, vmax=volume1.max()
+        volume1[:, :, initial_slice].T, origin="lower", cmap=cmap, vmin=0.0, vmax=volume1.max()
     )
 
     # Add colorbars
@@ -345,7 +354,7 @@ def show_one_volume(volume1, cmap="viridis"):
     # Update function for the slider
     def update(val):
         slice_index = int(slice_slider.val)
-        img1.set_array(volume1[:, :, slice_index])
+        img1.set_array(volume1[:, :, slice_index].T)
         fig.canvas.draw_idle()
 
     # Connect the slider to the update function
@@ -366,7 +375,7 @@ def show_two_volume(
     no_diff=False,
     axis=2,
 ):
-    """Show two volumes. gamma is used to visualize error."""
+    """Compare XYZ volumes along the selected axis. Gamma scales the error view."""
     if torch.is_tensor(volume1):
         volume1 = t2a(volume1)
     if torch.is_tensor(volume2):
@@ -393,7 +402,8 @@ def show_two_volume(
 
     # Display the initial slices
     img1 = ax[0].imshow(
-        volume1[:, :, initial_slice],
+        volume1[:, :, initial_slice].T,
+        origin="lower",
         cmap=cmap,
         vmin=0.0,
         vmax=volume1.max() if vmax is None else vmax,
@@ -401,7 +411,8 @@ def show_two_volume(
     if title1 is not None:
         ax[0].title.set_text(title1)
     img2 = ax[1].imshow(
-        volume2[:, :, initial_slice],
+        volume2[:, :, initial_slice].T,
+        origin="lower",
         cmap=cmap,
         vmin=0.0,
         vmax=volume2.max() if vmax is None else vmax,
@@ -410,7 +421,7 @@ def show_two_volume(
         ax[1].title.set_text(title2)
     if not no_diff:
         img3 = ax[2].imshow(
-            diff[:, :, initial_slice], cmap=cmap, vmin=0.0, vmax=diff.max()
+            diff[:, :, initial_slice].T, origin="lower", cmap=cmap, vmin=0.0, vmax=diff.max()
         )
         ax[2].title.set_text("error")
 
@@ -434,10 +445,10 @@ def show_two_volume(
     # Update function for the slider
     def update(val):
         slice_index = int(slice_slider.val)
-        img1.set_array(volume1[:, :, slice_index])
-        img2.set_array(volume2[:, :, slice_index])
+        img1.set_array(volume1[:, :, slice_index].T)
+        img2.set_array(volume2[:, :, slice_index].T)
         if not no_diff:
-            img3.set_array(diff[:, :, slice_index])
+            img3.set_array(diff[:, :, slice_index].T)
         fig.canvas.draw_idle()
 
     # Connect the slider to the update function

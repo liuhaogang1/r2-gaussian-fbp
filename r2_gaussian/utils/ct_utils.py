@@ -192,14 +192,16 @@ def run_ct_recon_algs(projs, angles, geo, ct_gt, save_path, method):
     for i_slice in trange(n_slice, desc="[{}] Save slice".format(method), leave=False):
         plt.imsave(
             osp.join(slice_save_path, "{0:05d}_gt.png".format(i_slice)),
-            ct_gt[:, :, i_slice],
+            ct_gt[:, :, i_slice].T,
+            origin="lower",
             cmap="gray",
             vmin=0.0,
             vmax=1.0,
         )
         plt.imsave(
             osp.join(slice_save_path, "{0:05d}_pred.png".format(i_slice)),
-            ct_pred[:, :, i_slice],
+            ct_pred[:, :, i_slice].T,
+            origin="lower",
             cmap="gray",
             vmin=0.0,
             vmax=1.0,
