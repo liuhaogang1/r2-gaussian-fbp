@@ -442,7 +442,7 @@ python apply_mask_to_volume.py \
 在项目的 TIGRE/CUDA 环境中单独运行以下命令。输入为 XYZ 轴序的三维 NPY，如 `vol_fbp_raw.npy`、`vol_fbp.npy`、`vol_pred.npy` 或高分辨率导出体。
 
 ```bash
-python scripts/forward_project_volume.py --volume /path/to/dataset/vol_fbp.npy --step-deg 0.5 --tiff
+python scripts/forward_project_volume.py --volume /path/to/dataset/vol_fbp.npy --step-deg 0.5
 ```
 
 角度从 0° 开始，每隔 `--step-deg` 取一帧，直到下一帧超过 180°。默认间隔 0.5°，共 361 帧，包含 180°。间隔 7° 时生成 26 帧，最后一帧为 175°。
@@ -453,6 +453,8 @@ python scripts/forward_project_volume.py --volume /path/to/dataset/vol_fbp.npy -
 python scripts/forward_project_volume.py --volume /path/to/model/test/iter_30000/vol_pred.npy --meta /path/to/dataset/meta_data.json --step-deg 1
 ```
 
-输出目录默认为体文件旁的 `<体名>_reprojection_<间隔>deg/`，可用 `--out` 指定新目录。`projections.npy` 保存形状为 `(帧, 高, 宽)` 的 float32 线积分，`angles_deg.npy` 按相同帧序保存角度，`projection_meta.json` 记录输入来源和实际几何。`--tiff` 额外生成同值的多页浮点 TIFF，可用 Fiji/ImageJ 打开。投影采用数据集的名义平行束几何。
+输出目录默认为体文件旁的 `<体名>_reprojection_<间隔>deg/`，可用 `--out` 指定新目录。每个角度在 `tiff/` 下生成一张独立的 float32 TIFF。默认间隔下，`Tomo_0000.tiff` 对应 0°，`Tomo_0001.tiff` 对应 0.5°，`Tomo_0360.tiff` 对应 180°。可单独打开图片，也可用 Fiji/ImageJ 的 Image Sequence 导入整个目录。
+
+`projections.npy` 保存形状为 `(帧, 高, 宽)` 的 float32 线积分，`angles_deg.npy` 按 TIFF 帧号保存角度，`projection_meta.json` 记录输入来源和实际几何。投影采用数据集的名义平行束几何。
 
 本目录不包含原始 TIFF、训练输出或 Git 元数据；数据和模型应放在代码目录之外。

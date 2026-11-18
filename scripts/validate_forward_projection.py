@@ -57,10 +57,17 @@ class ParallelProjectionTests(unittest.TestCase):
         values[12:17, 5:10, 9:14] = 12
         np.save(self.volume, values)
         args = argparse.Namespace(volume=self.volume, meta=None, step_deg="90",
-                                  out=self.root / "base", tiff=True)
+                                  out=self.root / "base")
         run(args)
         result = np.load(args.out / "projections.npy")
-        np.testing.assert_array_equal(tifffile.imread(args.out / "projections.tif"), result)
+        files = sorted((args.out / "tiff").glob("*.tiff"))
+        self.assertEqual([path.name for path in files],
+                         ["Tomo_0000.tiff", "Tomo_0001.tiff", "Tomo_0002.tiff"])
+        for index, path in enumerate(files):
+            with tifffile.TiffFile(path) as tif:
+                self.assertEqual(len(tif.pages), 1)
+                self.assertEqual(json.loads(tif.pages[0].description)["angle_deg"], index * 90)
+                np.testing.assert_array_equal(tif.asarray(), result[index])
         np.testing.assert_array_equal(np.load(args.out / "angles_deg.npy"), [0, 90, 180])
         np.testing.assert_allclose(result[:, 15, 19], [-2.1, -2.5, -2.1], atol=.05)
         for image, column in zip(result, [14, 15, 24]):

@@ -81,12 +81,16 @@ def load_scanner(volume_path, shape, meta_path):
     return scanner, meta_path.resolve(), sidecar if highres is not None else None
 
 
-def write_projections(folder, volume_zyx, scanner, angles, write_tiff):
+def write_projections(folder, volume_zyx, scanner, angles):
+    import tifffile
     from tigre.utilities.Ax import Ax
     from r2_gaussian.utils.ct_utils import get_geometry_tigre
 
     geo = get_geometry_tigre(scanner)
     shape = (len(angles), *scanner["nDetector"])
+    tiff_dir = folder / "tiff"
+    tiff_dir.mkdir()
+    digits = max(4, len(str(len(angles) - 1)))
     stack = np.lib.format.open_memmap(folder / "projections.npy", mode="w+",
                                       dtype=np.float32, shape=shape)
     try:
@@ -96,11 +100,11 @@ def write_projections(folder, volume_zyx, scanner, angles, write_tiff):
             if batch.shape != (len(radians), *shape[1:]) or not np.isfinite(batch).all():
                 raise ValueError(f"Invalid TIGRE projection output at frame {start}")
             stack[start:start + len(batch)] = batch[:, ::-1, :]
+            for index in range(start, start + len(batch)):
+                tifffile.imwrite(tiff_dir / f"Tomo_{index:0{digits}d}.tiff", stack[index],
+                                 photometric="minisblack",
+                                 metadata={"axes": "YX", "angle_deg": float(angles[index])})
         stack.flush()
-        if write_tiff:
-            import tifffile
-            tifffile.imwrite(folder / "projections.tif", stack, photometric="minisblack",
-                             metadata={"axes": "QYX"})
     finally:
         del stack
 
@@ -125,7 +129,7 @@ def run(args):
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
         folder = Path(temporary) / "result"
         folder.mkdir()
-        write_projections(folder, volume_zyx, scanner, angles, args.tiff)
+        write_projections(folder, volume_zyx, scanner, angles)
         np.save(folder / "angles_deg.npy", angles)
         report = {
             "volume": str(path), "meta": str(meta_path),
@@ -137,6 +141,7 @@ def run(args):
             "step_deg": args.step_deg, "first_deg": float(angles[0]),
             "last_deg": float(angles[-1]), "frame_count": len(angles),
             "angles_file": "angles_deg.npy",
+            "tiff_directory": "tiff",
         }
         (folder / "projection_meta.json").write_text(
             json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -150,7 +155,8 @@ def main():
     parser.add_argument("--step-deg", default="0.5", help="Angle interval in degrees (default: 0.5)")
     parser.add_argument("--meta", type=Path, help="Dataset meta_data.json")
     parser.add_argument("--out", type=Path, help="New output directory")
-    parser.add_argument("--tiff", action="store_true", help="Also save a float32 multipage TIFF")
+    parser.add_argument("--tiff", action="store_true",
+                        help="Save one TIFF per angle (enabled by default; accepted for compatibility)")
     args = parser.parse_args()
     try:
         run(args)
