@@ -437,4 +437,22 @@ python apply_mask_to_volume.py \
 
 输出是对训练 Gaussian 场的直接密集采样，并非额外训练或超分辨率推断。NIfTI 强度值与 NPY 一致，不随空间坐标恢复而缩放。float32 的 1024³ NPY 约占 4 GiB，NIfTI 还需要额外磁盘空间和压缩时间；其压缩大小取决于数据。原有训练、测试和管线入口保持不变。
 
+## 可选工具：从重建体生成平行束投影
+
+在项目的 TIGRE/CUDA 环境中单独运行以下命令。输入为 XYZ 轴序的三维 NPY，如 `vol_fbp_raw.npy`、`vol_fbp.npy`、`vol_pred.npy` 或高分辨率导出体。
+
+```bash
+python scripts/forward_project_volume.py --volume /path/to/dataset/vol_fbp.npy --step-deg 0.5 --tiff
+```
+
+角度从 0° 开始，每隔 `--step-deg` 取一帧，直到下一帧超过 180°。默认间隔 0.5°，共 361 帧，包含 180°。间隔 7° 时生成 26 帧，最后一帧为 175°。
+
+脚本优先使用 `--meta` 指定的数据集 JSON，其次读取体文件同目录的 `meta_data.json`。项目高分辨率导出体还可通过同名 JSON 中的 `source_path` 找到数据集，并使用导出体在原数据集单位下的尺寸与中心。模型测试目录中的 `vol_pred.npy` 可按下例指定几何。
+
+```bash
+python scripts/forward_project_volume.py --volume /path/to/model/test/iter_30000/vol_pred.npy --meta /path/to/dataset/meta_data.json --step-deg 1
+```
+
+输出目录默认为体文件旁的 `<体名>_reprojection_<间隔>deg/`，可用 `--out` 指定新目录。`projections.npy` 保存形状为 `(帧, 高, 宽)` 的 float32 线积分，`angles_deg.npy` 按相同帧序保存角度，`projection_meta.json` 记录输入来源和实际几何。`--tiff` 额外生成同值的多页浮点 TIFF，可用 Fiji/ImageJ 打开。投影采用数据集的名义平行束几何。
+
 本目录不包含原始 TIFF、训练输出或 Git 元数据；数据和模型应放在代码目录之外。
